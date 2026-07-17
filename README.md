@@ -86,22 +86,31 @@ All state is local; nothing leaves your machine.
 ### With mise (prebuilt binary, recommended)
 
 Tagged releases publish prebuilt binaries to GitHub Releases (macOS arm64/x86_64, Linux
-arm64/x86_64). [mise](https://mise.jdx.dev) installs the right one for your platform via its `ubi`
-backend — no Rust toolchain needed:
+arm64/x86_64). [mise](https://mise.jdx.dev) installs the right one for your platform via its
+`github` backend — no Rust toolchain needed:
 
 ```sh
-mise use -g "ubi:favetelinguis/hindsight@latest"   # or pin e.g. @0.1.0
+mise use -g "github:favetelinguis/hindsight@latest"   # or pin e.g. @0.1.0
 ```
 
 Or add it to `~/.config/mise/config.toml` (or a project `mise.toml`):
 
 ```toml
 [tools]
-"ubi:favetelinguis/hindsight" = "latest"
+"github:favetelinguis/hindsight" = "latest"
 ```
 
 `mise` puts `hindsight` on your `PATH`. (Release assets are named `hindsight-<target-triple>.tar.gz`, so
-`ubi` auto-detects your OS/arch; each ships with a `.sha256` checksum.)
+mise auto-detects your OS/arch; each ships with a `.sha256` checksum.)
+
+> **Note:** mise applies a `minimum_release_age` cooldown to freshly published releases as a
+> supply-chain precaution. If a just-cut release doesn't resolve ("no versions found matching date
+> filter"), either wait it out or exclude this tool in your mise settings:
+>
+> ```toml
+> [settings]
+> minimum_release_age_excludes = ["github:favetelinguis/hindsight"]
+> ```
 
 ### From source with Cargo
 
