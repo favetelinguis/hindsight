@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -31,6 +31,20 @@ pub fn open() -> Result<Connection> {
     let path = dir.join("history.db");
     let conn = Connection::open(&path)
         .with_context(|| format!("opening database {}", path.display()))?;
+    // Shell history is sensitive (like ~/.zsh_history, which zsh keeps 0600):
+    // restrict the dir and DB to the owner. The WAL/-shm side files inherit the
+    // DB file's permissions.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    // Every open shell writes here concurrently. WAL lets readers proceed during
+    // a write, and the busy timeout makes contending writers queue briefly
+    // instead of failing immediately with SQLITE_BUSY (which would drop records).
+    conn.busy_timeout(std::time::Duration::from_millis(2000))?;
+    conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
     migrate(&conn)?;
     Ok(conn)
 }
@@ -118,13 +132,15 @@ pub fn start(
 
 /// precmd: finalize the pending command for this session with its exit code.
 pub fn end(conn: &Connection, session: &str, exit_code: i64) -> Result<()> {
+    // `.optional()` maps only "no pending row" to None; real errors (e.g. lock
+    // contention) still propagate instead of silently dropping the command.
     let pending: Option<(String, String, i64)> = conn
         .query_row(
             "SELECT cmd, cwd, start_ts FROM pending WHERE session = ?1",
             [session],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
-        .ok();
+        .optional()?;
     let Some((cmd, cwd, start_ts)) = pending else {
         return Ok(());
     };
@@ -575,30 +591,99 @@ fn escape_like(s: &str) -> String {
 }
 
 /// Import commands from an existing zsh history file (best-effort).
+///
+/// Handles zsh's on-disk quirks: "metafied" bytes are decoded (history files
+/// are not valid UTF-8 once any multibyte character was typed), extended-history
+/// timestamps (`: <start>:<elapsed>;<command>`) become start_ts, and
+/// backslash-newline continuations are joined back into multiline commands.
+/// Re-running is safe: entries already imported (same command + timestamp) are
+/// skipped. Plain entries have no timestamp and get start_ts 0 (unknown).
 pub fn import_zsh(conn: &Connection, path: &std::path::Path) -> Result<usize> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let raw = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let text = String::from_utf8_lossy(&unmetafy(&raw)).into_owned();
+
+    let mut seen = std::collections::HashSet::new();
+    {
+        let mut stmt =
+            conn.prepare("SELECT cmd, start_ts FROM commands WHERE session = 'import'")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        for row in rows {
+            seen.insert(row?);
+        }
+    }
+
     let tx = conn.unchecked_transaction()?;
     let mut count = 0;
-    for line in content.lines() {
-        // zsh extended history format: ": <start>:<elapsed>;<command>"
-        let cmd = if let Some(rest) = line.strip_prefix(':') {
-            rest.splitn(2, ';').nth(1).unwrap_or("").trim()
-        } else {
-            line.trim()
-        };
-        if cmd.is_empty() {
+    for entry in logical_entries(&text) {
+        let (start_ts, cmd) = parse_zsh_entry(&entry);
+        let cmd = cmd.trim();
+        if cmd.is_empty() || seen.contains(&(cmd.to_string(), start_ts)) {
             continue;
         }
         tx.execute(
             "INSERT INTO commands (cmd, cwd, exit_code, start_ts, end_ts, session)
              VALUES (?1, '', NULL, ?2, NULL, 'import')",
-            rusqlite::params![cmd, now()],
+            rusqlite::params![cmd, start_ts],
         )?;
         count += 1;
     }
     tx.commit()?;
     Ok(count)
+}
+
+/// Undo zsh "metafication": in history files zsh escapes special bytes as
+/// 0x83 (Meta) followed by the original byte XOR 0x20.
+fn unmetafy(bytes: &[u8]) -> Vec<u8> {
+    const META: u8 = 0x83;
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut iter = bytes.iter();
+    while let Some(&b) = iter.next() {
+        if b == META {
+            if let Some(&next) = iter.next() {
+                out.push(next ^ 0x20);
+            }
+        } else {
+            out.push(b);
+        }
+    }
+    out
+}
+
+/// Join backslash-newline continuations: zsh writes an embedded newline as a
+/// line ending in `\`. Returns one string per logical history entry.
+fn logical_entries(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for line in text.lines() {
+        if let Some(stripped) = line.strip_suffix('\\') {
+            cur.push_str(stripped);
+            cur.push('\n');
+        } else {
+            cur.push_str(line);
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Split an entry into (start_ts, command). Extended history format is
+/// `: <start>:<elapsed>;<command>`; anything not matching it exactly (numeric
+/// start required) is a plain command with start_ts 0, so real commands that
+/// happen to begin with `:` are preserved.
+fn parse_zsh_entry(entry: &str) -> (i64, &str) {
+    if let Some(rest) = entry.strip_prefix(": ") {
+        if let Some((meta, cmd)) = rest.split_once(';') {
+            if let Some((start, _elapsed)) = meta.split_once(':') {
+                if let Ok(ts) = start.trim().parse::<i64>() {
+                    return (ts, cmd);
+                }
+            }
+        }
+    }
+    (0, entry)
 }
 
 // ============================================================================
@@ -692,4 +777,202 @@ pub fn session_timeline(conn: &Connection, session: &str) -> Result<Vec<Timeline
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn conn() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        migrate(&c).unwrap();
+        c
+    }
+
+    /// Record one finished command via the real start/end path.
+    fn record(c: &Connection, session: &str, cwd: &str, cmd: &str, exit: i64) {
+        start(c, session, cwd, cmd, &[]).unwrap();
+        end(c, session, exit).unwrap();
+    }
+
+    fn pending_count(c: &Connection) -> i64 {
+        c.query_row("SELECT COUNT(*) FROM pending", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn start_end_roundtrip() {
+        let c = conn();
+        record(&c, "s1", "/repo", "cargo build", 0);
+        assert_eq!(list(&c, None, None, None).unwrap(), vec!["cargo build"]);
+        assert_eq!(pending_count(&c), 0);
+    }
+
+    #[test]
+    fn end_without_pending_is_noop() {
+        let c = conn();
+        end(&c, "nope", 0).unwrap();
+        assert!(list(&c, None, None, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn start_skips_empty_and_ignored() {
+        let c = conn();
+        start(&c, "s1", "/", "   ", &[]).unwrap();
+        let ignore = vec![regex::Regex::new(r"^ls\b").unwrap()];
+        start(&c, "s1", "/", "ls -la", &ignore).unwrap();
+        assert_eq!(pending_count(&c), 0);
+    }
+
+    #[test]
+    fn list_dedups_newest_first() {
+        let c = conn();
+        record(&c, "s1", "/a", "one", 0);
+        record(&c, "s1", "/a", "two", 0);
+        record(&c, "s1", "/a", "one", 0);
+        assert_eq!(list(&c, None, None, None).unwrap(), vec!["one", "two"]);
+    }
+
+    #[test]
+    fn search_ranks_cwd_matches_first_then_recency() {
+        let c = conn();
+        record(&c, "s1", "/other", "git status", 0);
+        record(&c, "s1", "/here", "git push", 0);
+        record(&c, "s1", "/other", "git pull", 0); // newest overall
+        let hit = |o| search(&c, "/here", "git", o).unwrap();
+        assert_eq!(hit(0).as_deref(), Some("git push"));
+        assert_eq!(hit(1).as_deref(), Some("git pull"));
+        assert_eq!(hit(2).as_deref(), Some("git status"));
+        assert_eq!(hit(3), None);
+    }
+
+    #[test]
+    fn search_matches_like_wildcards_literally() {
+        let c = conn();
+        record(&c, "s1", "/", "grep 100% done", 0);
+        record(&c, "s1", "/", "grep 100x done", 0);
+        assert_eq!(
+            search(&c, "/", "grep 100%", 0).unwrap().as_deref(),
+            Some("grep 100% done")
+        );
+        assert_eq!(search(&c, "/", "grep 100%", 1).unwrap(), None);
+    }
+
+    #[test]
+    fn escape_like_escapes_backslash_first() {
+        assert_eq!(escape_like(r"a\b%c_d"), r"a\\b\%c\_d");
+    }
+
+    #[test]
+    fn soft_delete_hides_everywhere_and_restore_unhides() {
+        let c = conn();
+        record(&c, "s1", "/", "secret cmd", 0);
+        soft_delete(&c, "secret cmd").unwrap();
+        assert!(list(&c, None, None, None).unwrap().is_empty());
+        assert!(search(&c, "/", "secret", 0).unwrap().is_none());
+        assert!(inspect(&c, "secret cmd").unwrap().is_none());
+        assert!(stats_top_commands(&c, 10).unwrap().is_empty());
+        // ...but the data is still reachable via the deleted surface.
+        assert!(inspect_any(&c, "secret cmd").unwrap().is_some());
+        assert_eq!(deleted_list(&c).unwrap().len(), 1);
+        restore(&c, "secret cmd").unwrap();
+        assert_eq!(list(&c, None, None, None).unwrap(), vec!["secret cmd"]);
+    }
+
+    #[test]
+    fn fav_toggle_roundtrip() {
+        let c = conn();
+        assert!(fav_toggle(&c, "make deploy").unwrap());
+        assert_eq!(fav_list(&c).unwrap(), vec!["make deploy"]);
+        assert!(!fav_toggle(&c, "make deploy").unwrap());
+        assert!(fav_list(&c).unwrap().is_empty());
+    }
+
+    #[test]
+    fn note_set_get_clear() {
+        let c = conn();
+        note_set(&c, "kubectl apply", "careful in prod").unwrap();
+        assert_eq!(note_get(&c, "kubectl apply").unwrap(), "careful in prod");
+        note_set(&c, "kubectl apply", "  ").unwrap();
+        assert_eq!(note_get(&c, "kubectl apply").unwrap(), "");
+    }
+
+    #[test]
+    fn inspect_aggregates_exit_codes_and_directories() {
+        let c = conn();
+        record(&c, "s1", "/a", "flaky", 0);
+        record(&c, "s1", "/a", "flaky", 1);
+        record(&c, "s1", "/b", "flaky", 0);
+        let s = inspect(&c, "flaky").unwrap().unwrap();
+        assert_eq!(s.run_count, 3);
+        assert_eq!(s.exit_codes, vec![(Some(0), 2), (Some(1), 1)]);
+        assert_eq!(s.directories[0], ("/a".to_string(), 2));
+    }
+
+    fn write_history(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "hindsight-test-{}-{name}",
+            std::process::id()
+        ));
+        std::fs::write(&p, bytes).unwrap();
+        p
+    }
+
+    #[test]
+    fn import_extended_timestamps_multiline_and_reimport() {
+        let c = conn();
+        let p = write_history(
+            "ext",
+            b": 1700000000:0;git push\n: 1700000001:2;echo a\\\nb\nplain one\n",
+        );
+        assert_eq!(import_zsh(&c, &p).unwrap(), 3);
+        let ts: i64 = c
+            .query_row(
+                "SELECT start_ts FROM commands WHERE cmd = 'git push'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ts, 1700000000);
+        // Continuation joined back into a multiline command.
+        let multi: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM commands WHERE cmd = 'echo a\nb'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(multi, 1);
+        // Plain entry: unknown timestamp.
+        let plain_ts: i64 = c
+            .query_row(
+                "SELECT start_ts FROM commands WHERE cmd = 'plain one'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(plain_ts, 0);
+        // Re-import adds nothing.
+        assert_eq!(import_zsh(&c, &p).unwrap(), 0);
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn import_unmetafies_non_utf8_bytes() {
+        let c = conn();
+        // "echo café": é = 0xC3 0xA9, metafied as 0x83,(b^0x20) per byte.
+        let p = write_history("meta", b"echo caf\x83\xe3\x83\x89\n");
+        assert_eq!(import_zsh(&c, &p).unwrap(), 1);
+        assert_eq!(list(&c, None, None, None).unwrap(), vec!["echo café"]);
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn import_preserves_colon_commands() {
+        let c = conn();
+        let p = write_history("colon", b": > truncated-file\n");
+        assert_eq!(import_zsh(&c, &p).unwrap(), 1);
+        assert_eq!(list(&c, None, None, None).unwrap(), vec![": > truncated-file"]);
+        std::fs::remove_file(&p).ok();
+    }
 }

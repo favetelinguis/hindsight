@@ -2,7 +2,7 @@ mod config;
 mod db;
 mod init;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -323,14 +323,25 @@ fn main() -> Result<()> {
             }
         },
         Commands::Start { session, pwd, cmd } => {
-            let conn = db::open()?;
-            // Fail-open: a bad config must never block recording in the hook.
-            let ignore = config::ignore_regexes_fail_open();
-            db::start(&conn, &session, &pwd, &cmd.join(" "), &ignore)?;
+            // Fail-open: nothing in the hook path (bad config, DB trouble) may
+            // break the prompt — warn in one line on stderr and exit 0.
+            let record = || -> Result<()> {
+                let conn = db::open()?;
+                let ignore = config::ignore_regexes_fail_open();
+                db::start(&conn, &session, &pwd, &cmd.join(" "), &ignore)
+            };
+            if let Err(e) = record() {
+                eprintln!("hindsight: command not recorded: {e:#}");
+            }
         }
         Commands::End { session, exit } => {
-            let conn = db::open()?;
-            db::end(&conn, &session, exit)?;
+            let finalize = || -> Result<()> {
+                let conn = db::open()?;
+                db::end(&conn, &session, exit)
+            };
+            if let Err(e) = finalize() {
+                eprintln!("hindsight: exit code not recorded: {e:#}");
+            }
         }
         Commands::Query {
             list: _,
@@ -592,10 +603,30 @@ fn open_in_editor(initial: &str, tag: &str) -> Result<String> {
         _ => anyhow::bail!("$EDITOR is not set; set it (e.g. `export EDITOR=hx`)"),
     };
 
-    let mut tmp = std::env::temp_dir();
-    tmp.push(format!("hindsight-{tag}-{}.txt", std::process::id()));
+    // Notes can be sensitive, and the shared temp dir is world-writable: prefer
+    // the per-user $XDG_RUNTIME_DIR, create the file exclusively (O_EXCL, so a
+    // pre-planted symlink can't redirect the write), and keep it owner-only.
+    let dir = std::env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let tmp = dir.join(format!("hindsight-{tag}-{}-{nonce}.txt", std::process::id()));
     {
-        let mut f = std::fs::File::create(&tmp)?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts
+            .open(&tmp)
+            .with_context(|| format!("creating {}", tmp.display()))?;
         f.write_all(initial.as_bytes())?;
     }
 
@@ -702,12 +733,10 @@ fn picker(
     cmd: &str,
 ) -> Result<()> {
     let path = std::path::Path::new(state_path);
-    let mut mode = std::fs::read_to_string(path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| s == MODE_FAVORITES)
-        .map(|_| MODE_FAVORITES)
-        .unwrap_or(MODE_HISTORY);
+    let mut mode = match std::fs::read_to_string(path) {
+        Ok(s) if s.trim() == MODE_FAVORITES => MODE_FAVORITES,
+        _ => MODE_HISTORY,
+    };
 
     if toggle {
         mode = if mode == MODE_HISTORY {

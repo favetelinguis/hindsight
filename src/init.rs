@@ -15,11 +15,15 @@ pub const ZSH: &str = r####"# hindsight — zsh integration. Add `eval "$(hindsi
 # change the id mid-command, or the pending record written by preexec won't match
 # the precmd that ends it.
 if [[ -z "$__hindsight_session" ]]; then
-    zmodload zsh/datetime
-    # ${EPOCHREALTIME%.*} = whole seconds, ${__frac[1,3]} = first 3 fractional
-    # digits -> concatenated = milliseconds since the epoch (no subprocess).
-    local __frac=${EPOCHREALTIME#*.}
-    typeset -g __hindsight_session="${EPOCHREALTIME%.*}${__frac[1,3]}-$$"
+    # Anonymous function: scopes the scratch var so it doesn't leak into the
+    # interactive shell.
+    () {
+        zmodload zsh/datetime
+        # ${EPOCHREALTIME%.*} = whole seconds, ${__frac[1,3]} = first 3 fractional
+        # digits -> concatenated = milliseconds since the epoch (no subprocess).
+        local __frac=${EPOCHREALTIME#*.}
+        typeset -g __hindsight_session="${EPOCHREALTIME%.*}${__frac[1,3]}-$$"
+    }
 fi
 # State for arrow-key history search. __hindsight_offset is how far back we've
 # walked; __hindsight_prefix is the text typed before the first Up press, held

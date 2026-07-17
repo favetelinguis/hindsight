@@ -210,8 +210,8 @@ error and does nothing.
 A command is often run in many different terminal sessions, surrounded by different commands. Press
 **Ctrl-o** on a highlighted command to explore that:
 
-- A second fzf opens listing every **session** the command ran in, labeled by terminal + pane +
-  starting directory (e.g. `WezTerm#99  ~/repo`), with the occurrence count.
+- A second fzf opens listing every **session** the command ran in, labeled by its starting
+  directory (e.g. `~/repo`), with the occurrence count.
 - The **preview pane** shows that session's **full timeline** — every command in the session in
   order, with the matched command marked `→` and its exit code.
 - **Up / Down** switches between sessions; the preview updates live.
@@ -219,10 +219,10 @@ A command is often run in many different terminal sessions, surrounded by differ
   copy-paste commands out. (Read-only — hindsight doesn't save anything back.)
 - **Esc** returns to the main picker.
 
-Sessions are identified from the environment at record time: `$TERM_PROGRAM` plus a best-effort pane
-id (`WEZTERM_PANE`, `TMUX_PANE`, `KITTY_WINDOW_ID`, …) and the session's first directory. Commands
-recorded before this feature (no session metadata) fall back to their raw session id. Soft-deleted
-commands are excluded from timelines.
+A session is one shell process: its id is derived from the shell's start time and PID, independent
+of any terminal emulator or multiplexer. Sessions are labeled by the first directory recorded in
+them; sessions with no recorded starting directory (e.g. imported history) fall back to the raw
+session id. Soft-deleted commands are excluded from timelines.
 
 ### Other commands
 
@@ -230,7 +230,7 @@ commands are excluded from timelines.
 hindsight query --list                 # newest-first, deduped command list
 hindsight delete  -- "docker ps"       # soft-delete: hide from views (data kept)
 hindsight restore -- "docker ps"       # un-hide a soft-deleted command
-hindsight import                       # seed from ~/.zsh_history (best-effort)
+hindsight import                       # seed from ~/.zsh_history (best-effort; safe to re-run)
 ```
 
 Run `hindsight --help` or `hindsight <command> --help` for full details.
@@ -379,7 +379,7 @@ How a command was used across sessions — the sessions it ran in and each sessi
     // newest first
     {
       "session": "…", // opaque session id
-      "label": "WezTerm#99  ~/repo", // terminal + pane + starting dir
+      "label": "~/repo", // the session's starting directory
       "count": 3, // times the command ran in this session
       "timeline": [
         // the whole session, in order
