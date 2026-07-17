@@ -420,3 +420,5 @@ cargo uninstall hindsight
 
 Remove the `eval "$(hindsight init zsh)"` line from `~/.zshrc`. To also drop your recorded data, delete
 the data directory (see [How it works](#how-it-works)).
+
+<!-- test: verifying automatic Claude PR review -->
