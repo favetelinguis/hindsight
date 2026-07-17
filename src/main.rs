@@ -254,13 +254,14 @@ Prints a single JSON object to stdout:\n\
     session    opaque session id\n\
     label      human label (e.g. \"~/repo\")\n\
     count      times the command ran in this session\n\
-    timeline   the whole session, ordered: [{cmd, exit_code, start_ts, is_match}]\n\
+    last_run   unix timestamp (seconds) of the most recent run in this session\n\
+    timeline   the whole session, ordered: [{cmd, cwd, exit_code, start_ts, is_match}]\n\
 Pass the command verbatim after `--`.")]
     Json {
         #[arg(last = true, required = true, num_args = 1..)]
         cmd: Vec<String>,
     },
-    /// Internal: TSV `session<TAB>label<TAB>count` for the drill picker.
+    /// Internal: TSV `session<TAB>last_run<TAB>label<TAB>count` for the drill picker.
     Sessions {
         #[arg(last = true, required = true, num_args = 1..)]
         cmd: Vec<String>,
@@ -537,6 +538,7 @@ fn main() -> Result<()> {
                                     .map(|t| {
                                         serde_json::json!({
                                             "cmd": t.cmd,
+                                            "cwd": t.cwd,
                                             "exit_code": t.exit_code,
                                             "start_ts": t.start_ts,
                                             "is_match": t.cmd == cmd,
@@ -547,6 +549,7 @@ fn main() -> Result<()> {
                                     "session": s.session,
                                     "label": s.label,
                                     "count": s.count,
+                                    "last_run": s.last_ts,
                                     "timeline": timeline,
                                 })
                             })
@@ -558,7 +561,13 @@ fn main() -> Result<()> {
                 ContextAction::Sessions { cmd } => {
                     let cmd = cmd.join(" ");
                     for s in db::context_sessions(&conn, &cmd)? {
-                        println!("{}\t{}\t{}", s.session, s.label, s.count);
+                        println!(
+                            "{}\t{}\t{}\t{}",
+                            s.session,
+                            db::format_ts_local(s.last_ts),
+                            s.label,
+                            s.count
+                        );
                     }
                 }
                 ContextAction::Timeline { session, cmd } => {
@@ -652,21 +661,19 @@ fn note_edit(conn: &rusqlite::Connection, cmd: &str) -> Result<()> {
     Ok(())
 }
 
-/// Render a session's timeline as text for the preview pane / $EDITOR. Rows whose
-/// command equals `target` (when non-empty) are prefixed `→` with their exit code.
+/// Render a session's timeline as text for the preview pane / $EDITOR. Every row
+/// shows its directory and exit code; the row whose command equals `target`
+/// (when non-empty) is additionally prefixed `→`.
 fn render_timeline(conn: &rusqlite::Connection, session: &str, target: &str) -> Result<String> {
     let rows = db::session_timeline(conn, session)?;
     let mut out = String::new();
     for t in &rows {
-        if !target.is_empty() && t.cmd == target {
-            let exit = t
-                .exit_code
-                .map(|c| format!("(exit {c})"))
-                .unwrap_or_else(|| "(no exit)".into());
-            out.push_str(&format!("→ {}   {}\n", t.cmd, exit));
-        } else {
-            out.push_str(&format!("  {}\n", t.cmd));
-        }
+        let marker = if !target.is_empty() && t.cmd == target { "→ " } else { "  " };
+        let exit = t
+            .exit_code
+            .map(|c| format!("(exit {c})"))
+            .unwrap_or_else(|| "(no exit)".into());
+        out.push_str(&format!("{marker}{}   {}   {}\n", t.cmd, t.cwd, exit));
     }
     if out.is_empty() {
         out.push_str("(no commands in this session)\n");
@@ -692,6 +699,7 @@ fn context_drill(conn: &rusqlite::Connection, cmd: &str) -> Result<()> {
         .args([
             "--delimiter=\t",
             "--with-nth=2..",
+            "--no-sort",
             "--layout=reverse",
             "--preview-window=right,60%,wrap",
         ])
@@ -708,7 +716,14 @@ fn context_drill(conn: &rusqlite::Connection, cmd: &str) -> Result<()> {
 
     if let Some(stdin) = child.stdin.as_mut() {
         for s in &sessions {
-            writeln!(stdin, "{}\t{}\t{}", s.session, s.label, s.count)?;
+            writeln!(
+                stdin,
+                "{}\t{}\t{}\t{}",
+                s.session,
+                db::format_ts_local(s.last_ts),
+                s.label,
+                s.count
+            )?;
         }
     }
     // Read-only exploration: ignore the selection, just wait for fzf to close.

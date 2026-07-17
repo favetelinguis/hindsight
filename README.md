@@ -210,10 +210,11 @@ error and does nothing.
 A command is often run in many different terminal sessions, surrounded by different commands. Press
 **Ctrl-o** on a highlighted command to explore that:
 
-- A second fzf opens listing every **session** the command ran in, labeled by its starting
-  directory (e.g. `~/repo`), with the occurrence count.
+- A second fzf opens listing every **session** the command ran in, newest first, each row showing
+  when it last ran there (`2026-07-17 21:40`, local time, 24h clock), its starting directory (e.g.
+  `~/repo`), and the occurrence count.
 - The **preview pane** shows that session's **full timeline** — every command in the session in
-  order, with the matched command marked `→` and its exit code.
+  order, each with its directory and exit code, and the matched command marked `→`.
 - **Up / Down** switches between sessions; the preview updates live.
 - **Ctrl-e** opens the highlighted session's whole timeline in `$EDITOR`, so you can read it and
   copy-paste commands out. (Read-only — hindsight doesn't save anything back.)
@@ -381,10 +382,11 @@ How a command was used across sessions — the sessions it ran in and each sessi
       "session": "…", // opaque session id
       "label": "~/repo", // the session's starting directory
       "count": 3, // times the command ran in this session
+      "last_run": 1710000005, // unix timestamp (seconds) of the most recent run in this session
       "timeline": [
         // the whole session, in order
-        { "cmd": "git pull", "exit_code": 0, "start_ts": 1710000000, "is_match": false },
-        { "cmd": "cargo build", "exit_code": 0, "start_ts": 1710000005, "is_match": true }
+        { "cmd": "git pull", "cwd": "~/repo", "exit_code": 0, "start_ts": 1710000000, "is_match": false },
+        { "cmd": "cargo build", "cwd": "~/repo", "exit_code": 0, "start_ts": 1710000005, "is_match": true }
       ]
     }
   ]

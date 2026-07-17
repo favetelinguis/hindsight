@@ -695,16 +695,24 @@ pub struct SessionUsage {
     pub session: String,
     pub label: String,
     pub count: i64,
-    /// Most-recent run in this session (drives ordering; not otherwise read).
-    #[allow(dead_code)]
+    /// Most-recent run in this session; drives ordering and is rendered as the
+    /// session's displayed run time.
     pub last_ts: i64,
 }
 
 /// One command in a session's timeline.
 pub struct TimelineRow {
     pub cmd: String,
+    pub cwd: String,
     pub exit_code: Option<i64>,
     pub start_ts: i64,
+}
+
+/// Format a unix timestamp (seconds) as `YYYY-MM-DD HH:MM` in local time, 24h clock.
+pub fn format_ts_local(ts: i64) -> String {
+    chrono::DateTime::from_timestamp(ts, 0)
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "?".to_string())
 }
 
 /// Abbreviate a home-prefixed path with `~`.
@@ -762,7 +770,7 @@ pub fn context_sessions(conn: &Connection, cmd: &str) -> Result<Vec<SessionUsage
 /// Every command in a session, ordered chronologically (active-only).
 pub fn session_timeline(conn: &Connection, session: &str) -> Result<Vec<TimelineRow>> {
     let mut stmt = conn.prepare(
-        "SELECT cmd, exit_code, start_ts FROM commands
+        "SELECT cmd, cwd, exit_code, start_ts FROM commands
          WHERE session = ?1
            AND cmd NOT IN (SELECT cmd FROM deleted)
          ORDER BY id ASC",
@@ -771,8 +779,9 @@ pub fn session_timeline(conn: &Connection, session: &str) -> Result<Vec<Timeline
         .query_map([session], |r| {
             Ok(TimelineRow {
                 cmd: r.get(0)?,
-                exit_code: r.get(1)?,
-                start_ts: r.get(2)?,
+                cwd: abbreviate_home(&r.get::<_, String>(1)?),
+                exit_code: r.get(2)?,
+                start_ts: r.get(3)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -907,6 +916,46 @@ mod tests {
         assert_eq!(s.run_count, 3);
         assert_eq!(s.exit_codes, vec![(Some(0), 2), (Some(1), 1)]);
         assert_eq!(s.directories[0], ("/a".to_string(), 2));
+    }
+
+    #[test]
+    fn context_sessions_orders_newest_first() {
+        let c = conn();
+        c.execute(
+            "INSERT INTO commands (cmd, cwd, exit_code, start_ts, end_ts, session)
+             VALUES ('build', '/a', 0, 100, 100, 's1')",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO commands (cmd, cwd, exit_code, start_ts, end_ts, session)
+             VALUES ('build', '/b', 0, 200, 200, 's2')",
+            [],
+        )
+        .unwrap();
+        let sessions = context_sessions(&c, "build").unwrap();
+        assert_eq!(
+            sessions.iter().map(|s| (s.session.as_str(), s.last_ts)).collect::<Vec<_>>(),
+            vec![("s2", 200), ("s1", 100)]
+        );
+    }
+
+    #[test]
+    fn session_timeline_includes_cwd() {
+        let c = conn();
+        record(&c, "s1", "/repo", "cargo build", 0);
+        let rows = session_timeline(&c, "s1").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].cwd, "/repo");
+    }
+
+    #[test]
+    fn format_ts_local_produces_expected_shape() {
+        let s = format_ts_local(1_700_000_000);
+        assert!(
+            regex::Regex::new(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$").unwrap().is_match(&s),
+            "unexpected format: {s}"
+        );
     }
 
     fn write_history(name: &str, bytes: &[u8]) -> std::path::PathBuf {
