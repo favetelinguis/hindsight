@@ -1,0 +1,70 @@
+name: release
+
+# Build release binaries and attach them to a GitHub Release whenever a
+# version tag (e.g. v0.1.0) is pushed. Asset names include the Rust target
+# triple so `mise`/`ubi` can auto-detect the right one per OS/arch.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # needed to create the release and upload assets
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # cross-linker for the aarch64 Linux target (others build natively)
+      - name: Install aarch64 Linux linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          bin=hindsight
+          dir="${bin}-${{ matrix.target }}"
+          mkdir "$dir"
+          cp "target/${{ matrix.target }}/release/${bin}" "$dir/"
+          cp README.md "$dir/" 2>/dev/null || true
+          tar -czf "${dir}.tar.gz" "$dir"
+          shasum -a 256 "${dir}.tar.gz" > "${dir}.tar.gz.sha256" 2>/dev/null \
+            || sha256sum "${dir}.tar.gz" > "${dir}.tar.gz.sha256"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            hindsight-${{ matrix.target }}.tar.gz
+            hindsight-${{ matrix.target }}.tar.gz.sha256
