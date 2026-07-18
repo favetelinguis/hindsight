@@ -160,7 +160,7 @@ pub fn list(
     exit: Option<i64>,
     limit: Option<i64>,
 ) -> Result<Vec<String>> {
-    Ok(list_rows(conn, cwd, exit, limit)?
+    Ok(list_rows(conn, cwd, exit, limit, None)?
         .into_iter()
         .map(|(cmd, _, _)| cmd)
         .collect())
@@ -168,25 +168,39 @@ pub fn list(
 
 /// Like `list`, but each row carries whether the command is a favorite and
 /// whether it has a note. Powers the history view of the fzf picker (★/✎ markers).
+///
+/// When `session` is given, commands run in that session rank first (by their
+/// most recent occurrence within the session), followed by the rest of history
+/// by global recency.
 pub fn list_rows(
     conn: &Connection,
     cwd: Option<&str>,
     exit: Option<i64>,
     limit: Option<i64>,
+    session: Option<&str>,
 ) -> Result<Vec<(String, bool, bool)>> {
     // Group by command text, keeping the most recent occurrence for ordering.
     // MAX(id) is the recency tiebreaker: start_ts is second-granularity, so
     // commands run in the same second would otherwise order arbitrarily.
-    let mut sql = String::from(
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    // sid = newest occurrence within the current session, NULL if the command
+    // was never run there. Selected first so its `?` precedes the filter params.
+    let sid_col = if let Some(s) = session {
+        params.push(Box::new(s.to_string()));
+        "MAX(CASE WHEN c.session = ? THEN c.id END)"
+    } else {
+        "NULL"
+    };
+    let mut sql = format!(
         "SELECT c.cmd, MAX(c.id) AS mid,
                 MAX(CASE WHEN f.cmd IS NOT NULL THEN 1 ELSE 0 END) AS is_fav,
-                MAX(CASE WHEN n.note IS NOT NULL AND n.note <> '' THEN 1 ELSE 0 END) AS has_note
+                MAX(CASE WHEN n.note IS NOT NULL AND n.note <> '' THEN 1 ELSE 0 END) AS has_note,
+                {sid_col} AS sid
          FROM commands c
          LEFT JOIN favorites f ON f.cmd = c.cmd
          LEFT JOIN notes n ON n.cmd = c.cmd
          WHERE c.cmd NOT IN (SELECT cmd FROM deleted)",
     );
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     if let Some(c) = cwd {
         sql.push_str(" AND c.cwd = ?");
         params.push(Box::new(c.to_string()));
@@ -195,7 +209,7 @@ pub fn list_rows(
         sql.push_str(" AND c.exit_code = ?");
         params.push(Box::new(e));
     }
-    sql.push_str(" GROUP BY c.cmd ORDER BY mid DESC");
+    sql.push_str(" GROUP BY c.cmd ORDER BY (sid IS NOT NULL) DESC, COALESCE(sid, mid) DESC");
     if let Some(l) = limit {
         sql.push_str(" LIMIT ?");
         params.push(Box::new(l));
@@ -840,6 +854,37 @@ mod tests {
         record(&c, "s1", "/a", "two", 0);
         record(&c, "s1", "/a", "one", 0);
         assert_eq!(list(&c, None, None, None).unwrap(), vec!["one", "two"]);
+    }
+
+    #[test]
+    fn list_rows_ranks_session_commands_first_then_recency() {
+        let c = conn();
+        record(&c, "other", "/a", "git status", 0);
+        record(&c, "mine", "/a", "cargo build", 0);
+        record(&c, "mine", "/a", "cargo test", 0);
+        record(&c, "other", "/a", "git pull", 0);
+        record(&c, "other", "/a", "cargo build", 0); // re-run outside the session, newest overall
+        let cmds = |s: Option<&str>| {
+            list_rows(&c, None, None, None, s)
+                .unwrap()
+                .into_iter()
+                .map(|(cmd, _, _)| cmd)
+                .collect::<Vec<_>>()
+        };
+        // Session commands first, ordered by in-session recency (the later
+        // out-of-session "cargo build" must not lift it above "cargo test"),
+        // then the rest by global recency.
+        assert_eq!(
+            cmds(Some("mine")),
+            vec!["cargo test", "cargo build", "git pull", "git status"]
+        );
+        // No session: pure global recency.
+        assert_eq!(
+            cmds(None),
+            vec!["cargo build", "git pull", "cargo test", "git status"]
+        );
+        // Unknown session: falls back to global recency.
+        assert_eq!(cmds(Some("nope")), cmds(None));
     }
 
     #[test]

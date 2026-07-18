@@ -67,8 +67,8 @@ function __hindsight_search_widget() {
     local state selected
     state="${TMPDIR:-/tmp}/hindsight-picker.$$.$RANDOM"
     print -r -- history > "$state"
-    selected="$(command hindsight picker --state "$state" \
-        | fzf --height 60% --layout=reverse --tac --delimiter=$'\t' --nth=2.. \
+    selected="$(command hindsight picker --state "$state" --session "$__hindsight_session" \
+        | fzf --height 60% --layout=reverse --scheme=history --delimiter=$'\t' --nth=2.. \
               --query "$LBUFFER" \
               --border=rounded --border-label=' hindsight ' --border-label-pos=2 \
               --header 'ctrl-r hist/fav   ctrl-s star   ctrl-e note   ctrl-t show note   ctrl-o context' \
@@ -77,9 +77,9 @@ function __hindsight_search_widget() {
               --preview-window 'down,40%,wrap,border-top,hidden' \
               --preview-label ' note ' \
               --bind 'ctrl-t:toggle-preview' \
-              --bind "ctrl-r:reload(command hindsight picker --state $state --toggle)" \
-              --bind "ctrl-s:reload(command hindsight picker --state $state --star-toggle -- {2..})" \
-              --bind "ctrl-e:execute(command hindsight note edit -- {2..})+reload(command hindsight picker --state $state)" \
+              --bind "ctrl-r:reload(command hindsight picker --state $state --session $__hindsight_session --toggle)" \
+              --bind "ctrl-s:reload(command hindsight picker --state $state --session $__hindsight_session --star-toggle -- {2..})" \
+              --bind "ctrl-e:execute(command hindsight note edit -- {2..})+reload(command hindsight picker --state $state --session $__hindsight_session)" \
               --bind "ctrl-o:execute(command hindsight context drill -- {2..})")"
     \command rm -f "$state"
     if [[ -n "$selected" ]]; then

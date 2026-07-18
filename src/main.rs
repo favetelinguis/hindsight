@@ -164,6 +164,9 @@ Use --limit to cap each ranked list (default 20).")]
         /// Star/unstar this command, then reprint the current view.
         #[arg(long)]
         star_toggle: bool,
+        /// Current shell session id: its commands rank first in the history view.
+        #[arg(long)]
+        session: Option<String>,
         /// The command to star/unstar (everything after `--`).
         #[arg(last = true, num_args = 0..)]
         cmd: Vec<String>,
@@ -589,10 +592,18 @@ fn main() -> Result<()> {
             state,
             toggle,
             star_toggle,
+            session,
             cmd,
         } => {
             let conn = db::open()?;
-            picker(&conn, &state, toggle, star_toggle, &cmd.join(" "))?;
+            picker(
+                &conn,
+                &state,
+                toggle,
+                star_toggle,
+                session.as_deref(),
+                &cmd.join(" "),
+            )?;
         }
     }
     Ok(())
@@ -745,6 +756,7 @@ fn picker(
     state_path: &str,
     toggle: bool,
     star_toggle: bool,
+    session: Option<&str>,
     cmd: &str,
 ) -> Result<()> {
     let path = std::path::Path::new(state_path);
@@ -772,7 +784,7 @@ fn picker(
             println!("{marker}\t{cmd}");
         }
     } else {
-        for (cmd, is_fav, has_note) in db::list_rows(conn, None, None, None)? {
+        for (cmd, is_fav, has_note) in db::list_rows(conn, None, None, None, session)? {
             let marker = marker(is_fav, has_note);
             println!("{marker}\t{cmd}");
         }
