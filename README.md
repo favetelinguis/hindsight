@@ -1,6 +1,6 @@
 # hindsight
 
-A fast command-history recorder and search tool for zsh.
+A fast command-history recorder and search tool for zsh and bash.
 
 `hindsight` records **every command you run** — along with the directory it ran in, its exit code, and
 timestamps — into a local SQLite database. It then lets you fuzzy-search that history, keep
@@ -50,13 +50,14 @@ That shapes every feature here:
 ## How it works
 
 `hindsight` follows the same shape as tools like zoxide: a single self-contained binary that prints
-shell integration code, which you `eval` in your `~/.zshrc`.
+shell integration code, which you `eval` in your `~/.zshrc` or `~/.bashrc`.
 
-- **Recording.** The integration installs two zsh hooks:
-  - `preexec` runs `hindsight start` just before a command executes, saving the command text, `$PWD`,
-    and a start time as a _pending_ entry (keyed by a per-shell session id).
-  - `precmd` runs `hindsight end` right after it finishes, recording the exit code (`$?`) and
-    finalizing the entry.
+- **Recording.** The integration installs two hooks (zsh: `preexec`/`precmd`; bash: a `DEBUG` trap
+  plus `PROMPT_COMMAND`):
+  - just before a command executes, `hindsight start` saves the command text, `$PWD`,
+    and a start time as a _pending_ entry (keyed by a per-shell session id);
+  - right after it finishes, `hindsight end` records the exit code (`$?`) and
+    finalizes the entry.
 - **Storage.** Everything lives in one SQLite database. Location (resolved in this order):
   1. `$_HINDSIGHT_DATA_DIR` if set, otherwise
   2. the platform data dir:
@@ -73,7 +74,8 @@ All state is local; nothing leaves your machine.
 
 ## Requirements
 
-- **zsh**
+- **zsh**, or **bash ≥ 5.0** (macOS ships bash 3.2 — `brew install bash` for a modern one; on
+  older bash the integration prints a warning and loads nothing)
 - **[fzf](https://github.com/junegunn/fzf) ≥ 0.52** — required. The Ctrl-r picker pipes history into
   `fzf` as NUL-delimited records (`--read0`, so multiline commands stay one entry), which needs
   fzf 0.52 or newer. Install it first, e.g. `brew install fzf`.
@@ -132,28 +134,53 @@ Add this to the **end** of your `~/.zshrc`:
 eval "$(hindsight init zsh)"
 ```
 
-Open a new terminal (or `source ~/.zshrc`) and you're recording.
+or, for bash, to the **end** of your `~/.bashrc`:
+
+```sh
+eval "$(hindsight init bash)"
+```
+
+Open a new terminal (or re-source your rc file) and you're recording.
 
 ### Ordering matters: source hindsight **after** fzf
 
-Both fzf and hindsight bind **Ctrl-r**, and in zsh **the last binding wins**. fzf's own integration
-(`eval "$(fzf --zsh)"`) binds `^R` to its history widget; hindsight binds `^R` to its picker. To make
-**hindsight** own Ctrl-r, its `eval` line must come **after** fzf's in your `~/.zshrc`:
+Both fzf and hindsight bind **Ctrl-r**, and in both shells **the last binding wins**. fzf's own
+integration (`eval "$(fzf --zsh)"` / `eval "$(fzf --bash)"`) binds `^R` to its history widget;
+hindsight binds `^R` to its picker. To make **hindsight** own Ctrl-r, its `eval` line must come
+**after** fzf's in your rc file:
 
 ```sh
 # fzf first…
-eval "$(fzf --zsh)"
+eval "$(fzf --zsh)"        # in ~/.bashrc: eval "$(fzf --bash)"
 
 # …hindsight last, so its Ctrl-r binding overrides fzf's
-eval "$(hindsight init zsh)"
+eval "$(hindsight init zsh)"   # in ~/.bashrc: eval "$(hindsight init bash)"
 ```
 
-> Verified: `fzf --zsh` runs `bindkey -M emacs/viins/vicmd '^R' fzf-history-widget`; hindsight runs
-> `bindkey '^R' __hindsight_search_widget`. Whichever `eval` executes later is the binding that stays
-> in effect. If Ctrl-r still opens fzf's plain history, hindsight was sourced too early.
+> Verified: `fzf --zsh` runs `bindkey -M emacs/viins/vicmd '^R' fzf-history-widget`, and `fzf --bash`
+> runs `bind -m emacs/vi-insert/vi-command -x '"\C-r": __fzf_history__'`; hindsight installs the
+> same kind of binding for `__hindsight_search_widget`. Whichever `eval` executes later is the binding
+> that stays in effect. If Ctrl-r still opens fzf's plain history, hindsight was sourced too early.
 
 hindsight still _uses_ fzf internally for its picker — it just replaces the **keybinding**, not fzf
 itself.
+
+### Bash notes
+
+- **bash ≥ 5.0 is required.** On older bash the eval prints a one-line warning and changes nothing.
+- **`HISTCONTROL` still applies.** Recording reads the typed line from bash's own history, so with
+  `ignoredups` an immediately repeated command isn't re-recorded, and with `ignorespace` (or
+  `ignoreboth`) space-prefixed commands are never recorded — consistent with bash's own behavior,
+  and handy as a deliberate "off the record" escape hatch. History must be enabled with
+  `HISTSIZE > 0` (the interactive default).
+- **Up/Down replace readline's native history navigation** (the same trade the zsh integration
+  makes). To opt out, rebind the arrows after the eval line.
+- **bash-preexec is supported.** If [bash-preexec](https://github.com/rcaloras/bash-preexec) is
+  loaded before hindsight, hindsight registers into its `preexec_functions`/`precmd_functions`
+  instead of installing its own `DEBUG` trap. If some *other* tool already owns the `DEBUG` trap,
+  hindsight leaves it alone and disables recording with a warning (search over already-recorded
+  history keeps working).
+- The integration enables `shopt -s cmdhist lithist` so multiline commands are stored verbatim.
 
 ---
 
@@ -230,6 +257,7 @@ hindsight query --list                 # newest-first, deduped command list
 hindsight delete  -- "docker ps"       # soft-delete: hide from views (data kept)
 hindsight restore -- "docker ps"       # un-hide a soft-deleted command
 hindsight import                       # seed from ~/.zsh_history (best-effort; safe to re-run)
+hindsight import --shell bash          # seed from ~/.bash_history instead
 ```
 
 Run `hindsight --help` or `hindsight <command> --help` for full details.
@@ -420,8 +448,10 @@ comes from the `_HINDSIGHT_DATA_DIR` environment variable: when set, hindsight p
 `history.db` there instead of the platform data directory. All dev tasks point it at
 `.dev/data` inside the repo (gitignored).
 
-Prerequisites: a Rust toolchain, [mise](https://mise.jdx.dev) (as the task runner), `fzf`,
-and optionally `sqlite3` (used by the seed script to backdate sessions across days).
+Prerequisites: a Rust toolchain, [mise](https://mise.jdx.dev) (as the task runner; it also
+installs the pinned `fzf` from the repo's `mise.toml` — run `mise install` once), and
+optionally `sqlite3` (used by the seed script to backdate sessions across days). The bash
+sandbox additionally needs a system bash ≥ 5.0 (bash is not in the mise registry).
 
 | Task | What it does |
 | --- | --- |
@@ -430,13 +460,16 @@ and optionally `sqlite3` (used by the seed script to backdate sessions across da
 | `mise run dev:seed` | Wipe and re-seed the dev DB: 4 sessions across different directories and days, mixed exit codes, a favorite, a note |
 | `mise run dev -- <subcommand>` | Run any hindsight subcommand against the dev DB, e.g. `mise run dev -- stats` or `mise run dev -- context json -- git status` |
 | `mise run dev:shell` | Open a sandboxed interactive zsh wired to the debug build and the dev DB |
+| `mise run dev:shell:bash` | Same sandbox, but bash |
 | `mise run dev:reset` | Delete `.dev/` (dev DB and sandbox state) |
 
 `dev:shell` starts a fresh zsh with a scratch `ZDOTDIR` (so your real zshrc is not sourced)
 that prepends `target/debug` to `PATH`, exports `_HINDSIGHT_DATA_DIR`, and evals
 `hindsight init zsh` — the full interactive experience (recording, Ctrl-r picker, Ctrl-o
-context, Up-arrow search) against your working copy. The prompt is marked `hindsight-dev`;
-leave with `exit` or Ctrl-d.
+context, Up-arrow search) against your working copy. `dev:shell:bash` is the same for bash,
+using a scratch `--rcfile` and a scratch `HISTFILE` (both variants are
+`./scripts/dev-shell.sh [zsh|bash]`). The prompt is marked `hindsight-dev`; leave with
+`exit` or Ctrl-d.
 
 Typical workflow for validating a change or PR:
 
@@ -453,5 +486,6 @@ mise run dev:shell    # poke at Ctrl-r / Ctrl-o interactively, then `exit`
 cargo uninstall hindsight
 ```
 
-Remove the `eval "$(hindsight init zsh)"` line from `~/.zshrc`. To also drop your recorded data, delete
-the data directory (see [How it works](#how-it-works)).
+Remove the `eval "$(hindsight init zsh)"` line from `~/.zshrc` (or the `init bash` line from
+`~/.bashrc`). To also drop your recorded data, delete the data directory (see
+[How it works](#how-it-works)).

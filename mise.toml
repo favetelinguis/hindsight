@@ -1,3 +1,9 @@
+[tools]
+# The picker needs fzf >= 0.52; pin it so the sandbox is reproducible.
+# bash is not in the mise registry — the bash sandbox uses the system bash
+# (>= 5.0 required; dev-shell.sh checks).
+fzf = "latest"
+
 [tasks.build]
 description = "Build the debug binary"
 run = "cargo build"
@@ -18,8 +24,13 @@ run = "./scripts/seed-dev-db.sh"
 depends = ["build"]
 
 [tasks."dev:shell"]
-description = "Open a sandboxed zsh with full hindsight integration on the dev DB"
+description = "Open a sandboxed zsh with full hindsight integration on the dev DB (bash: dev:shell:bash)"
 run = "./scripts/dev-shell.sh"
+depends = ["build"]
+
+[tasks."dev:shell:bash"]
+description = "Open a sandboxed bash with full hindsight integration on the dev DB"
+run = "./scripts/dev-shell.sh bash"
 depends = ["build"]
 
 [tasks."dev:reset"]

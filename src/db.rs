@@ -630,6 +630,71 @@ pub fn import_zsh(conn: &Connection, path: &std::path::Path) -> Result<usize> {
     let raw = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let text = String::from_utf8_lossy(&unmetafy(&raw)).into_owned();
 
+    let entries = logical_entries(&text)
+        .into_iter()
+        .map(|entry| {
+            let (start_ts, cmd) = parse_zsh_entry(&entry);
+            (start_ts, cmd.to_string())
+        })
+        .collect::<Vec<_>>();
+    import_entries(conn, entries)
+}
+
+/// Import commands from an existing bash history file (best-effort).
+///
+/// Bash history is plain text, one command per line. When `HISTTIMEFORMAT` was
+/// set, bash writes a `#<epoch>` marker line before each entry; the marker's
+/// epoch becomes start_ts and all lines until the next marker are one entry
+/// (this is how `lithist` multiline commands persist). Lines before any marker
+/// — or a file with no markers at all — are one entry per line with start_ts 0.
+/// Re-running is safe: entries already imported (same command + timestamp) are
+/// skipped.
+pub fn import_bash(conn: &Connection, path: &std::path::Path) -> Result<usize> {
+    let raw = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    import_entries(conn, parse_bash_history(&text))
+}
+
+/// Split bash history text into (start_ts, command) entries. Only a line that
+/// is exactly `#` followed by digits counts as a timestamp marker; anything
+/// else starting with `#` (e.g. `#comment`) is command text — the same
+/// ambiguity bash itself lives with.
+fn parse_bash_history(text: &str) -> Vec<(i64, String)> {
+    fn marker_ts(line: &str) -> Option<i64> {
+        let digits = line.strip_prefix('#')?;
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        digits.parse().ok()
+    }
+
+    let mut out = Vec::new();
+    let mut cur: Option<(i64, String)> = None;
+    for line in text.lines() {
+        if let Some(ts) = marker_ts(line) {
+            if let Some(entry) = cur.take() {
+                out.push(entry);
+            }
+            cur = Some((ts, String::new()));
+        } else if let Some((_, cmd)) = cur.as_mut() {
+            if !cmd.is_empty() {
+                cmd.push('\n');
+            }
+            cmd.push_str(line);
+        } else {
+            out.push((0, line.to_string()));
+        }
+    }
+    if let Some(entry) = cur.take() {
+        out.push(entry);
+    }
+    out
+}
+
+/// Shared insert path for the importers: dedupe against previously imported
+/// rows (same command + timestamp, session 'import') and insert the rest in
+/// one transaction. Returns how many entries were inserted.
+fn import_entries(conn: &Connection, entries: Vec<(i64, String)>) -> Result<usize> {
     let mut seen = std::collections::HashSet::new();
     {
         let mut stmt =
@@ -642,8 +707,7 @@ pub fn import_zsh(conn: &Connection, path: &std::path::Path) -> Result<usize> {
 
     let tx = conn.unchecked_transaction()?;
     let mut count = 0;
-    for entry in logical_entries(&text) {
-        let (start_ts, cmd) = parse_zsh_entry(&entry);
+    for (start_ts, cmd) in entries {
         let cmd = cmd.trim();
         if cmd.is_empty() || seen.contains(&(cmd.to_string(), start_ts)) {
             continue;
@@ -1108,6 +1172,62 @@ mod tests {
             list(&c, None, None, None).unwrap(),
             vec![": > truncated-file"]
         );
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn import_bash_timestamped_multiline_and_reimport() {
+        let c = conn();
+        let p = write_history(
+            "bash-ext",
+            b"#1700000000\ngit push\n#1700000001\nfor f in *\ndo\n  echo $f\ndone\n",
+        );
+        assert_eq!(import_bash(&c, &p).unwrap(), 2);
+        let ts: i64 = c
+            .query_row(
+                "SELECT start_ts FROM commands WHERE cmd = 'git push'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ts, 1700000000);
+        // Lines between markers form one multiline entry.
+        let multi: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM commands WHERE cmd = 'for f in *\ndo\n  echo $f\ndone'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(multi, 1);
+        // Re-import adds nothing.
+        assert_eq!(import_bash(&c, &p).unwrap(), 0);
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn import_bash_plain_lines_without_markers() {
+        let c = conn();
+        let p = write_history("bash-plain", b"git status\nls -la\n");
+        assert_eq!(import_bash(&c, &p).unwrap(), 2);
+        let ts: i64 = c
+            .query_row("SELECT MAX(start_ts) FROM commands", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ts, 0);
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn import_bash_hash_lines_that_are_not_markers_are_commands() {
+        let c = conn();
+        // Only `#<digits>` alone on a line is a timestamp marker; other
+        // #-prefixed lines are command text.
+        let p = write_history("bash-hash", b"#comment\n#12x\n#1700000000\necho hi\n");
+        assert_eq!(import_bash(&c, &p).unwrap(), 3);
+        let rows = list(&c, None, None, None).unwrap();
+        assert!(rows.contains(&"#comment".to_string()));
+        assert!(rows.contains(&"#12x".to_string()));
+        assert!(rows.contains(&"echo hi".to_string()));
         std::fs::remove_file(&p).ok();
     }
 }

@@ -3,14 +3,14 @@ mod db;
 mod init;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(
     name = "hindsight",
     version,
-    about = "A fast command history recorder and search tool for zsh",
-    long_about = "hindsight records every command you run in zsh — with its working directory, exit \
+    about = "A fast command history recorder and search tool for zsh and bash",
+    long_about = "hindsight records every command you run in zsh or bash — with its working directory, exit \
 code, and timestamps — into a local SQLite database, and makes it easy to search, favorite, \
 annotate, and analyze your shell history.\n\n\
 FOR AI AGENTS: two read-only commands emit machine-readable JSON on stdout:\n\
@@ -27,14 +27,21 @@ struct Cli {
     command: Commands,
 }
 
+/// History formats `hindsight import` understands.
+#[derive(Clone, Copy, ValueEnum)]
+enum ImportShell {
+    Zsh,
+    Bash,
+}
+
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate shell integration code (currently: zsh).
+    /// Generate shell integration code (zsh or bash).
     Init {
         /// Shell to generate configuration for.
         shell: String,
     },
-    /// Record a pending command (called from the zsh preexec hook).
+    /// Record a pending command (called from the shell's preexec hook).
     Start {
         /// Per-shell session id.
         #[arg(long)]
@@ -79,9 +86,12 @@ enum Commands {
         #[arg(last = true, num_args = 0..)]
         prefix: Vec<String>,
     },
-    /// Import commands from an existing zsh history file.
+    /// Import commands from an existing shell history file.
     Import {
-        /// Path to the history file (default: ~/.zsh_history).
+        /// History format to import (sets the default path too).
+        #[arg(long, value_enum, default_value_t = ImportShell::Zsh)]
+        shell: ImportShell,
+        /// Path to the history file (default: ~/.zsh_history or ~/.bash_history).
         #[arg(long)]
         from: Option<String>,
     },
@@ -332,8 +342,9 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Init { shell } => match shell.as_str() {
             "zsh" => print!("{}", init::ZSH),
+            "bash" => print!("{}", init::BASH),
             other => {
-                anyhow::bail!("unsupported shell '{other}' (only 'zsh' is supported)");
+                anyhow::bail!("unsupported shell '{other}' (only 'zsh' and 'bash' are supported)");
             }
         },
         Commands::Start { session, pwd, cmd } => {
@@ -381,15 +392,22 @@ fn main() -> Result<()> {
                 println!("{m}");
             }
         }
-        Commands::Import { from } => {
+        Commands::Import { shell, from } => {
+            let default_name = match shell {
+                ImportShell::Zsh => ".zsh_history",
+                ImportShell::Bash => ".bash_history",
+            };
             let path = match from {
                 Some(p) => std::path::PathBuf::from(p),
                 None => dirs::home_dir()
-                    .map(|h| h.join(".zsh_history"))
+                    .map(|h| h.join(default_name))
                     .ok_or_else(|| anyhow::anyhow!("could not resolve home directory"))?,
             };
             let conn = db::open()?;
-            let n = db::import_zsh(&conn, &path)?;
+            let n = match shell {
+                ImportShell::Zsh => db::import_zsh(&conn, &path)?,
+                ImportShell::Bash => db::import_bash(&conn, &path)?,
+            };
             eprintln!("hindsight: imported {n} commands from {}", path.display());
         }
         Commands::Fav { action } => {
