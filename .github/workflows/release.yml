@@ -62,9 +62,31 @@ jobs:
           shasum -a 256 "${dir}.tar.gz" > "${dir}.tar.gz.sha256" 2>/dev/null \
             || sha256sum "${dir}.tar.gz" > "${dir}.tar.gz.sha256"
 
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
+      # Hand the packages to a single release job instead of uploading here:
+      # parallel matrix jobs racing to create the same release produced
+      # duplicate releases and failed uploads (see the v0.3.0 tag).
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: hindsight-${{ matrix.target }}
+          path: |
             hindsight-${{ matrix.target }}.tar.gz
             hindsight-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: create release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          fail_on_unmatched_files: true
