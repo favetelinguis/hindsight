@@ -414,6 +414,41 @@ in which projects and terminals, and whether it tends to succeed there.
 
 ---
 
+## Local development
+
+Everything below runs against a repo-local throwaway database — your installed `hindsight`
+binary, your `~/.zshrc` integration, and your real history are never touched. The isolation
+comes from the `_HINDSIGHT_DATA_DIR` environment variable: when set, hindsight puts
+`history.db` there instead of the platform data directory. All dev tasks point it at
+`.dev/data` inside the repo (gitignored).
+
+Prerequisites: a Rust toolchain, [mise](https://mise.jdx.dev) (as the task runner), `fzf`,
+and optionally `sqlite3` (used by the seed script to backdate sessions across days).
+
+| Task | What it does |
+| --- | --- |
+| `mise run build` | `cargo build` (debug binary at `target/debug/hindsight`) |
+| `mise run test` | `cargo test` |
+| `mise run dev:seed` | Wipe and re-seed the dev DB: 4 sessions across different directories and days, mixed exit codes, a favorite, a note |
+| `mise run dev -- <subcommand>` | Run any hindsight subcommand against the dev DB, e.g. `mise run dev -- stats` or `mise run dev -- context json -- git status` |
+| `mise run dev:shell` | Open a sandboxed interactive zsh wired to the debug build and the dev DB |
+| `mise run dev:reset` | Delete `.dev/` (dev DB and sandbox state) |
+
+`dev:shell` starts a fresh zsh with a scratch `ZDOTDIR` (so your real zshrc is not sourced)
+that prepends `target/debug` to `PATH`, exports `_HINDSIGHT_DATA_DIR`, and evals
+`hindsight init zsh` — the full interactive experience (recording, Ctrl-r picker, Ctrl-o
+context, Up-arrow search) against your working copy. The prompt is marked `hindsight-dev`;
+leave with `exit` or Ctrl-d.
+
+Typical workflow for validating a change or PR:
+
+```sh
+git checkout <branch>
+mise run test
+mise run dev:seed     # rebuilds first, then seeds a predictable dataset
+mise run dev:shell    # poke at Ctrl-r / Ctrl-o interactively, then `exit`
+```
+
 ## Uninstall
 
 ```sh

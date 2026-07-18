@@ -1,0 +1,27 @@
+[tasks.build]
+description = "Build the debug binary"
+run = "cargo build"
+
+[tasks.test]
+description = "Run the test suite"
+run = "cargo test"
+
+[tasks.dev]
+description = "Run hindsight against the local dev DB (.dev/data), e.g.: mise run dev -- stats"
+run = "cargo run --quiet --"
+[tasks.dev.env]
+_HINDSIGHT_DATA_DIR = "{{config_root}}/.dev/data"
+
+[tasks."dev:seed"]
+description = "Create/refresh the dev DB with realistic seed data"
+run = "./scripts/seed-dev-db.sh"
+depends = ["build"]
+
+[tasks."dev:shell"]
+description = "Open a sandboxed zsh with full hindsight integration on the dev DB"
+run = "./scripts/dev-shell.sh"
+depends = ["build"]
+
+[tasks."dev:reset"]
+description = "Delete the dev DB and sandbox state"
+run = "rm -rf {{config_root}}/.dev"
