@@ -58,7 +58,6 @@ precmd_functions+=(__hindsight_precmd)
 #   - Ctrl-S stars/unstars the highlighted command (creates favorites).
 #   - Ctrl-E edits the highlighted command's note in $EDITOR.
 #   - Ctrl-T shows/hides the note preview pane (hidden by default).
-#   - Ctrl-K deletes the highlighted command everywhere.
 #   - Ctrl-O explores how the command was used across sessions (usage context).
 # Rows are "<marker>\t<cmd>" (marker: ★ favorite, ✎ note); fzf matches on the
 # command column only and the marker is stripped from the accepted line. A
@@ -72,7 +71,7 @@ function __hindsight_search_widget() {
         | fzf --height 60% --layout=reverse --tac --delimiter=$'\t' --nth=2.. \
               --query "$LBUFFER" \
               --border=rounded --border-label=' hindsight ' --border-label-pos=2 \
-              --header 'ctrl-r hist/fav   ctrl-s star   ctrl-e note   ctrl-t show note   ctrl-k delete   ctrl-o context' \
+              --header 'ctrl-r hist/fav   ctrl-s star   ctrl-e note   ctrl-t show note   ctrl-o context' \
               --header-first \
               --preview 'command hindsight note show -- {2..}' \
               --preview-window 'down,40%,wrap,border-top,hidden' \
@@ -81,7 +80,6 @@ function __hindsight_search_widget() {
               --bind "ctrl-r:reload(command hindsight picker --state $state --toggle)" \
               --bind "ctrl-s:reload(command hindsight picker --state $state --star-toggle -- {2..})" \
               --bind "ctrl-e:execute(command hindsight note edit -- {2..})+reload(command hindsight picker --state $state)" \
-              --bind "ctrl-k:reload(command hindsight delete -- {2..} > /dev/null; command hindsight picker --state $state)" \
               --bind "ctrl-o:execute(command hindsight context drill -- {2..})")"
     \command rm -f "$state"
     if [[ -n "$selected" ]]; then

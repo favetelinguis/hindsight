@@ -169,11 +169,8 @@ a note. In-picker keys:
 | `Ctrl-s` | Star / unstar the highlighted command (create/remove a favorite)      |
 | `Ctrl-e` | Edit the highlighted command's note in `$EDITOR`                      |
 | `Ctrl-t` | Show / hide the note preview pane (bottom, hidden by default)         |
-| `Ctrl-k` | Soft-delete the highlighted command (hidden from views; data kept)    |
 | `Ctrl-o` | Explore how the command was used across sessions (usage context)      |
 | `Enter`  | Put the selected command on your prompt                               |
-
-`Ctrl-k` is a **soft delete** — see [Soft delete](#soft-delete-nothing-is-ever-destroyed).
 
 ### Up / Down arrows
 
@@ -291,7 +288,7 @@ hindsight prune ignore --apply    # actually soft-delete the matches
 
 ## Soft delete: nothing is ever destroyed
 
-hindsight **never physically deletes command data**. `Ctrl-k`, `hindsight delete`, and
+hindsight **never physically deletes command data**. `hindsight delete` and
 `hindsight prune ignore --apply` all **soft-delete**: the command is marked hidden and disappears from
 every user-facing surface (the picker, `query --list`, Up/Down search, favorites, and the
 `inspect` / `stats` agent commands). The underlying history, favorite, and note rows stay in the
