@@ -29,8 +29,8 @@ pub fn open() -> Result<Connection> {
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("creating data dir {}", dir.display()))?;
     let path = dir.join("history.db");
-    let conn = Connection::open(&path)
-        .with_context(|| format!("opening database {}", path.display()))?;
+    let conn =
+        Connection::open(&path).with_context(|| format!("opening database {}", path.display()))?;
     // Shell history is sensitive (like ~/.zsh_history, which zsh keeps 0600):
     // restrict the dir and DB to the owner. The WAL/-shm side files inherit the
     // DB file's permissions.
@@ -256,11 +256,7 @@ pub fn fav_toggle(conn: &Connection, cmd: &str) -> Result<bool> {
         return Ok(false);
     }
     let exists: bool = conn
-        .query_row(
-            "SELECT 1 FROM favorites WHERE cmd = ?1",
-            [cmd],
-            |_| Ok(()),
-        )
+        .query_row("SELECT 1 FROM favorites WHERE cmd = ?1", [cmd], |_| Ok(()))
         .is_ok();
     if exists {
         fav_remove(conn, cmd)?;
@@ -286,7 +282,9 @@ pub fn fav_rows(conn: &Connection) -> Result<Vec<(String, bool)>> {
          WHERE f.cmd NOT IN (SELECT cmd FROM deleted)
          ORDER BY f.created_ts DESC, f.cmd ASC",
     )?;
-    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0)))?;
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0))
+    })?;
     let mut out = Vec::new();
     for row in rows {
         out.push(row?);
@@ -315,11 +313,9 @@ pub fn note_set(conn: &Connection, cmd: &str, note: &str) -> Result<()> {
 /// Get a command's note, or "" if none.
 pub fn note_get(conn: &Connection, cmd: &str) -> Result<String> {
     Ok(conn
-        .query_row(
-            "SELECT note FROM notes WHERE cmd = ?1",
-            [cmd.trim()],
-            |r| r.get::<_, String>(0),
-        )
+        .query_row("SELECT note FROM notes WHERE cmd = ?1", [cmd.trim()], |r| {
+            r.get::<_, String>(0)
+        })
         .unwrap_or_default())
 }
 
@@ -347,7 +343,9 @@ pub fn restore(conn: &Connection, cmd: &str) -> Result<()> {
 /// True if the command is currently soft-deleted.
 pub fn is_deleted(conn: &Connection, cmd: &str) -> Result<bool> {
     Ok(conn
-        .query_row("SELECT 1 FROM deleted WHERE cmd = ?1", [cmd.trim()], |_| Ok(()))
+        .query_row("SELECT 1 FROM deleted WHERE cmd = ?1", [cmd.trim()], |_| {
+            Ok(())
+        })
         .is_ok())
 }
 
@@ -406,7 +404,9 @@ pub fn inspect_any(conn: &Connection, cmd: &str) -> Result<Option<CommandStats>>
          GROUP BY exit_code ORDER BY exit_code",
     )?;
     let exit_codes = stmt
-        .query_map([cmd], |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, i64>(1)?)))?
+        .query_map([cmd], |r| {
+            Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, i64>(1)?))
+        })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let mut stmt = conn.prepare(
@@ -442,7 +442,9 @@ pub fn stats_top_commands(conn: &Connection, limit: i64) -> Result<Vec<(String, 
          GROUP BY cmd ORDER BY n DESC, cmd ASC LIMIT ?1",
     )?;
     let out = stmt
-        .query_map([limit], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+        .query_map([limit], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(out)
 }
@@ -463,7 +465,11 @@ pub fn stats_error_prone(conn: &Connection, limit: i64) -> Result<Vec<(String, i
     )?;
     let out = stmt
         .query_map([limit], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(out)
@@ -478,7 +484,9 @@ pub fn stats_top_dirs(conn: &Connection, limit: i64) -> Result<Vec<(String, i64)
          GROUP BY cwd ORDER BY n DESC, cwd ASC LIMIT ?1",
     )?;
     let out = stmt
-        .query_map([limit], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+        .query_map([limit], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(out)
 }
@@ -555,7 +563,11 @@ pub fn deleted_list(conn: &Connection) -> Result<Vec<(String, i64, i64)>> {
     )?;
     let out = stmt
         .query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(out)
@@ -601,7 +613,9 @@ pub fn search(conn: &Connection, cwd: &str, prefix: &str, offset: i64) -> Result
 
 /// Escape `%` and `_` so a user-typed prefix is matched literally in LIKE.
 fn escape_like(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 /// Import commands from an existing zsh history file (best-effort).
@@ -725,7 +739,11 @@ pub struct TimelineRow {
 /// Format a unix timestamp (seconds) as `YYYY-MM-DD HH:MM` in local time, 24h clock.
 pub fn format_ts_local(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
         .unwrap_or_else(|| "?".to_string())
 }
 
@@ -775,7 +793,12 @@ pub fn context_sessions(conn: &Connection, cmd: &str) -> Result<Vec<SessionUsage
             let last_ts: i64 = r.get(2)?;
             let init_cwd: String = r.get(3)?;
             let label = session_label(&session, &init_cwd);
-            Ok(SessionUsage { session, label, count, last_ts })
+            Ok(SessionUsage {
+                session,
+                label,
+                count,
+                last_ts,
+            })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
@@ -854,6 +877,19 @@ mod tests {
         record(&c, "s1", "/a", "two", 0);
         record(&c, "s1", "/a", "one", 0);
         assert_eq!(list(&c, None, None, None).unwrap(), vec!["one", "two"]);
+    }
+
+    #[test]
+    fn multiline_cmd_roundtrips_verbatim() {
+        let c = conn();
+        let cmd = "for f in *.txt\ndo\n  echo \"$f\"\ndone";
+        record(&c, "s1", "/a", cmd, 0);
+        assert_eq!(list(&c, None, None, None).unwrap(), vec![cmd]);
+        let rows = list_rows(&c, None, None, None, None).unwrap();
+        assert_eq!(rows[0].0, cmd);
+        // favorites/notes key on the verbatim cmd, embedded newlines included.
+        assert!(fav_toggle(&c, cmd).unwrap());
+        assert_eq!(fav_list(&c).unwrap(), vec![cmd]);
     }
 
     #[test]
@@ -980,7 +1016,10 @@ mod tests {
         .unwrap();
         let sessions = context_sessions(&c, "build").unwrap();
         assert_eq!(
-            sessions.iter().map(|s| (s.session.as_str(), s.last_ts)).collect::<Vec<_>>(),
+            sessions
+                .iter()
+                .map(|s| (s.session.as_str(), s.last_ts))
+                .collect::<Vec<_>>(),
             vec![("s2", 200), ("s1", 100)]
         );
     }
@@ -998,16 +1037,15 @@ mod tests {
     fn format_ts_local_produces_expected_shape() {
         let s = format_ts_local(1_700_000_000);
         assert!(
-            regex::Regex::new(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$").unwrap().is_match(&s),
+            regex::Regex::new(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
+                .unwrap()
+                .is_match(&s),
             "unexpected format: {s}"
         );
     }
 
     fn write_history(name: &str, bytes: &[u8]) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!(
-            "hindsight-test-{}-{name}",
-            std::process::id()
-        ));
+        let p = std::env::temp_dir().join(format!("hindsight-test-{}-{name}", std::process::id()));
         std::fs::write(&p, bytes).unwrap();
         p
     }
@@ -1066,7 +1104,10 @@ mod tests {
         let c = conn();
         let p = write_history("colon", b": > truncated-file\n");
         assert_eq!(import_zsh(&c, &p).unwrap(), 1);
-        assert_eq!(list(&c, None, None, None).unwrap(), vec![": > truncated-file"]);
+        assert_eq!(
+            list(&c, None, None, None).unwrap(),
+            vec![": > truncated-file"]
+        );
         std::fs::remove_file(&p).ok();
     }
 }

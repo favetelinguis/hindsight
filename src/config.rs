@@ -41,8 +41,8 @@ pub fn load_ignore() -> anyhow::Result<Vec<String>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(anyhow::anyhow!("reading {}: {e}", path.display())),
     };
-    let cfg: RawConfig = toml::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("parsing {}: {e}", path.display()))?;
+    let cfg: RawConfig =
+        toml::from_str(&text).map_err(|e| anyhow::anyhow!("parsing {}: {e}", path.display()))?;
     Ok(cfg.ignore)
 }
 

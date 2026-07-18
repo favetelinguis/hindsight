@@ -59,16 +59,20 @@ precmd_functions+=(__hindsight_precmd)
 #   - Ctrl-E edits the highlighted command's note in $EDITOR.
 #   - Ctrl-T shows/hides the note preview pane (hidden by default).
 #   - Ctrl-O explores how the command was used across sessions (usage context).
-# Rows are "<marker>\t<cmd>" (marker: ★ favorite, ✎ note); fzf matches on the
-# command column only and the marker is stripped from the accepted line. A
-# per-run state file holds the current view so fzf's reload knows what to show.
+# Records are NUL-terminated "<marker>\t<cmd>" (marker: ★ favorite, ✎ note);
+# --read0 framing keeps multiline commands as a single fzf item, displayed
+# across multiple list lines. fzf matches on the command column only and the
+# marker (everything through the first tab) is stripped from the accepted
+# item. A per-run state file holds the current view so fzf's reload knows
+# what to show.
 function __hindsight_search_widget() {
     emulate -L zsh
     local state selected
     state="${TMPDIR:-/tmp}/hindsight-picker.$$.$RANDOM"
     print -r -- history > "$state"
     selected="$(command hindsight picker --state "$state" --session "$__hindsight_session" \
-        | fzf --height 60% --layout=reverse --scheme=history --delimiter=$'\t' --nth=2.. \
+        | fzf --height 60% --layout=reverse --scheme=history --read0 --highlight-line \
+              --delimiter=$'\t' --nth=2.. \
               --query "$LBUFFER" \
               --border=rounded --border-label=' hindsight ' --border-label-pos=2 \
               --header 'ctrl-r hist/fav   ctrl-s star   ctrl-e note   ctrl-t show note   ctrl-o context' \

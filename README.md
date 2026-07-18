@@ -74,8 +74,9 @@ All state is local; nothing leaves your machine.
 ## Requirements
 
 - **zsh**
-- **[fzf](https://github.com/junegunn/fzf)** — required. The Ctrl-r picker pipes history into `fzf`.
-  Install it first, e.g. `brew install fzf`.
+- **[fzf](https://github.com/junegunn/fzf) ≥ 0.52** — required. The Ctrl-r picker pipes history into
+  `fzf` as NUL-delimited records (`--read0`, so multiline commands stay one entry), which needs
+  fzf 0.52 or newer. Install it first, e.g. `brew install fzf`.
 - An **`$EDITOR`** set if you want to edit notes (see [Notes](#notes)). `hindsight` uses `$EDITOR`
   only — it does **not** fall back to `$VISUAL` or `vi`.
 

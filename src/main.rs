@@ -96,9 +96,11 @@ enum Commands {
         action: NoteAction,
     },
     /// Hide a command from all views (soft delete; data is never destroyed).
-    #[command(long_about = "Soft-delete a command: hide it from every user-facing view (picker, \
+    #[command(
+        long_about = "Soft-delete a command: hide it from every user-facing view (picker, \
 query, arrow search, favorites, inspect, stats). NOTHING is physically removed — the data stays in \
-the database and can be inspected with `hindsight deleted` or brought back with `hindsight restore`.")]
+the database and can be inspected with `hindsight deleted` or brought back with `hindsight restore`."
+    )]
     Delete {
         #[arg(last = true, required = true, num_args = 1..)]
         cmd: Vec<String>,
@@ -119,7 +121,8 @@ the database and can be inspected with `hindsight deleted` or brought back with 
         action: DeletedAction,
     },
     /// Inspect ALL metadata for one command, as JSON (for AI agents).
-    #[command(long_about = "Inspect ALL metadata for one command, as JSON (for AI agents).\n\n\
+    #[command(
+        long_about = "Inspect ALL metadata for one command, as JSON (for AI agents).\n\n\
 Prints a single JSON object to stdout:\n\
   command       the command inspected (string)\n\
   found         false if the command is unknown (then no other fields)\n\
@@ -130,19 +133,22 @@ Prints a single JSON object to stdout:\n\
   is_favorite   boolean\n\
   first_run     unix seconds of the earliest run, or null\n\
   last_run      unix seconds of the most recent run, or null\n\
-Pass the command verbatim after `--`, e.g.  hindsight inspect -- git push")]
+Pass the command verbatim after `--`, e.g.  hindsight inspect -- git push"
+    )]
     Inspect {
         #[arg(last = true, required = true, num_args = 1..)]
         cmd: Vec<String>,
     },
     /// Global usage statistics across all history, as JSON (for AI agents).
-    #[command(long_about = "Global usage statistics across all history, as JSON (for AI agents).\n\n\
+    #[command(
+        long_about = "Global usage statistics across all history, as JSON (for AI agents).\n\n\
 Prints a single JSON object to stdout:\n\
   totals          {distinct_commands, total_runs, favorites, notes}\n\
   top_commands    array of {\"command\", \"count\"}, most-run first\n\
   error_prone     array of {\"command\", \"failures\", \"runs\"} (>=1 non-zero exit)\n\
   top_directories array of {\"cwd\", \"count\"}, most-used first\n\
-Use --limit to cap each ranked list (default 20).")]
+Use --limit to cap each ranked list (default 20)."
+    )]
     Stats {
         /// Max entries in each ranked list (default 20).
         #[arg(long, default_value_t = 20)]
@@ -223,11 +229,13 @@ enum NoteAction {
 #[derive(Subcommand)]
 enum PruneWhat {
     /// Soft-delete stored commands matching the ignore list in hindsight.toml.
-    #[command(long_about = "Soft-delete stored commands that match the ignore list in hindsight.toml.\n\n\
+    #[command(
+        long_about = "Soft-delete stored commands that match the ignore list in hindsight.toml.\n\n\
 DRY RUN BY DEFAULT: prints the commands (and how many history rows each) that WOULD be soft-deleted \
 and changes nothing. Re-run with --apply to actually hide them. Soft delete never destroys data — \
 hidden commands remain in the database and can be seen with `hindsight deleted` or restored with \
-`hindsight restore`.")]
+`hindsight restore`."
+    )]
     Ignore {
         /// Actually soft-delete the matches (default is a dry run that only prints).
         #[arg(long)]
@@ -249,7 +257,8 @@ enum DeletedAction {
 #[derive(Subcommand)]
 enum ContextAction {
     /// All sessions a command ran in, with whole-session timelines, as JSON (for AI agents).
-    #[command(long_about = "Show how a command was used across sessions, as JSON (for AI agents).\n\n\
+    #[command(
+        long_about = "Show how a command was used across sessions, as JSON (for AI agents).\n\n\
 Prints a single JSON object to stdout:\n\
   command    the command inspected (string)\n\
   found      false if the command has no active occurrences\n\
@@ -259,7 +268,8 @@ Prints a single JSON object to stdout:\n\
     count      times the command ran in this session\n\
     last_run   unix timestamp (seconds) of the most recent run in this session\n\
     timeline   the whole session, ordered: [{cmd, cwd, exit_code, start_ts, is_match}]\n\
-Pass the command verbatim after `--`.")]
+Pass the command verbatim after `--`."
+    )]
     Json {
         #[arg(last = true, required = true, num_args = 1..)]
         cmd: Vec<String>,
@@ -357,7 +367,7 @@ fn main() -> Result<()> {
             // is currently the only mode.
             let conn = db::open()?;
             for cmd in db::list(&conn, cwd.as_deref(), exit, limit)? {
-                println!("{cmd}");
+                println!("{}", display_one_line(&cmd));
             }
         }
         Commands::Search {
@@ -390,14 +400,14 @@ fn main() -> Result<()> {
                 FavAction::Toggle { cmd } => {
                     let cmd = cmd.join(" ");
                     if db::fav_toggle(&conn, &cmd)? {
-                        println!("★ favorited: {cmd}");
+                        println!("★ favorited: {}", display_one_line(&cmd));
                     } else {
-                        println!("  unfavorited: {cmd}");
+                        println!("  unfavorited: {}", display_one_line(&cmd));
                     }
                 }
                 FavAction::List => {
                     for cmd in db::fav_list(&conn)? {
-                        println!("{cmd}");
+                        println!("{}", display_one_line(&cmd));
                     }
                 }
             }
@@ -442,7 +452,10 @@ fn main() -> Result<()> {
             if matched.is_empty() {
                 println!("Nothing matches the ignore list.");
             } else if apply {
-                println!("Soft-deleted {} commands ({rows} history rows).", matched.len());
+                println!(
+                    "Soft-deleted {} commands ({rows} history rows).",
+                    matched.len()
+                );
             } else {
                 println!(
                     "DRY RUN — nothing deleted. {} commands ({rows} history rows) would be soft-deleted:",
@@ -535,19 +548,20 @@ fn main() -> Result<()> {
                         let arr: Vec<serde_json::Value> = sessions
                             .iter()
                             .map(|s| {
-                                let timeline: Vec<serde_json::Value> = db::session_timeline(&conn, &s.session)
-                                    .unwrap_or_default()
-                                    .iter()
-                                    .map(|t| {
-                                        serde_json::json!({
-                                            "cmd": t.cmd,
-                                            "cwd": t.cwd,
-                                            "exit_code": t.exit_code,
-                                            "start_ts": t.start_ts,
-                                            "is_match": t.cmd == cmd,
+                                let timeline: Vec<serde_json::Value> =
+                                    db::session_timeline(&conn, &s.session)
+                                        .unwrap_or_default()
+                                        .iter()
+                                        .map(|t| {
+                                            serde_json::json!({
+                                                "cmd": t.cmd,
+                                                "cwd": t.cwd,
+                                                "exit_code": t.exit_code,
+                                                "start_ts": t.start_ts,
+                                                "is_match": t.cmd == cmd,
+                                            })
                                         })
-                                    })
-                                    .collect();
+                                        .collect();
                                 serde_json::json!({
                                     "session": s.session,
                                     "label": s.label,
@@ -557,7 +571,8 @@ fn main() -> Result<()> {
                                 })
                             })
                             .collect();
-                        let v = serde_json::json!({ "command": cmd, "found": true, "sessions": arr });
+                        let v =
+                            serde_json::json!({ "command": cmd, "found": true, "sessions": arr });
                         println!("{}", serde_json::to_string_pretty(&v)?);
                     }
                 }
@@ -635,7 +650,10 @@ fn open_in_editor(initial: &str, tag: &str) -> Result<String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    let tmp = dir.join(format!("hindsight-{tag}-{}-{nonce}.txt", std::process::id()));
+    let tmp = dir.join(format!(
+        "hindsight-{tag}-{}-{nonce}.txt",
+        std::process::id()
+    ));
     {
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create_new(true);
@@ -653,7 +671,10 @@ fn open_in_editor(initial: &str, tag: &str) -> Result<String> {
     // Split so values like `code --wait` work.
     let mut parts = editor.split_whitespace();
     let prog = parts.next().unwrap_or("vi");
-    let status = std::process::Command::new(prog).args(parts).arg(&tmp).status()?;
+    let status = std::process::Command::new(prog)
+        .args(parts)
+        .arg(&tmp)
+        .status()?;
     if !status.success() {
         let _ = std::fs::remove_file(&tmp);
         anyhow::bail!("editor exited with an error");
@@ -679,12 +700,21 @@ fn render_timeline(conn: &rusqlite::Connection, session: &str, target: &str) -> 
     let rows = db::session_timeline(conn, session)?;
     let mut out = String::new();
     for t in &rows {
-        let marker = if !target.is_empty() && t.cmd == target { "→ " } else { "  " };
+        let marker = if !target.is_empty() && t.cmd == target {
+            "→ "
+        } else {
+            "  "
+        };
         let exit = t
             .exit_code
             .map(|c| format!("(exit {c})"))
             .unwrap_or_else(|| "(no exit)".into());
-        out.push_str(&format!("{marker}{}   {}   {}\n", t.cmd, t.cwd, exit));
+        out.push_str(&format!(
+            "{marker}{}   {}   {}\n",
+            display_one_line(&t.cmd),
+            t.cwd,
+            exit
+        ));
     }
     if out.is_empty() {
         out.push_str("(no commands in this session)\n");
@@ -699,7 +729,7 @@ fn context_drill(conn: &rusqlite::Connection, cmd: &str) -> Result<()> {
 
     let sessions = db::context_sessions(conn, cmd)?;
     if sessions.is_empty() {
-        eprintln!("no recorded sessions for: {cmd}");
+        eprintln!("no recorded sessions for: {}", display_one_line(cmd));
         return Ok(());
     }
 
@@ -714,7 +744,10 @@ fn context_drill(conn: &rusqlite::Connection, cmd: &str) -> Result<()> {
             "--layout=reverse",
             "--preview-window=right,60%,wrap",
         ])
-        .arg(format!("--header=sessions where: {cmd}   up/down: switch   ctrl-e: open in $EDITOR"))
+        .arg(format!(
+            "--header=sessions where: {}   up/down: switch   ctrl-e: open in $EDITOR",
+            display_one_line(cmd)
+        ))
         .arg(format!(
             "--preview={exe} context timeline --session {{1}} -- \"$HINDSIGHT_CONTEXT_CMD\""
         ))
@@ -749,8 +782,10 @@ const MODE_FAVORITES: &str = "favorites";
 /// Drive one refresh of the fzf picker.
 ///
 /// Reads (and possibly mutates) the mode state file, applies any star toggle,
-/// then prints the current view as tab-delimited `<marker>\t<cmd>` rows, where
-/// marker is "★" for favorites, "✎" for a note (concatenated if both).
+/// then prints the current view as NUL-terminated `<marker>\t<cmd>` records,
+/// where marker is "★" for favorites, "✎" for a note (concatenated if both).
+/// NUL framing (fzf --read0) keeps commands with embedded newlines as a
+/// single fzf item.
 fn picker(
     conn: &rusqlite::Connection,
     state_path: &str,
@@ -781,15 +816,27 @@ fn picker(
     if mode == MODE_FAVORITES {
         for (cmd, has_note) in db::fav_rows(conn)? {
             let marker = marker(true, has_note);
-            println!("{marker}\t{cmd}");
+            print!("{marker}\t{cmd}\0");
         }
     } else {
         for (cmd, is_fav, has_note) in db::list_rows(conn, None, None, None, session)? {
             let marker = marker(is_fav, has_note);
-            println!("{marker}\t{cmd}");
+            print!("{marker}\t{cmd}\0");
         }
     }
+    use std::io::Write as _;
+    std::io::stdout().flush()?;
     Ok(())
+}
+
+/// Render a command on a single line for display-only output: embedded
+/// newlines become a visible "↵". Never fed back into the shell or the DB.
+fn display_one_line(cmd: &str) -> std::borrow::Cow<'_, str> {
+    if cmd.contains('\n') {
+        std::borrow::Cow::Owned(cmd.replace('\n', "↵"))
+    } else {
+        std::borrow::Cow::Borrowed(cmd)
+    }
 }
 
 /// Build the marker column: ★ for favorite, ✎ for note (both if applicable).
