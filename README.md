@@ -65,8 +65,9 @@ shell integration code, which you `eval` in your `~/.zshrc` or `~/.bashrc`.
      - Linux: `$XDG_DATA_HOME/hindsight/history.db` or `~/.local/share/hindsight/history.db`
 - **Retrieval.**
   - **Ctrl-r** opens an fzf picker over your history.
-  - **Up / Down arrows** do a cwd-aware prefix search: type part of a command, press Up to cycle
-    older matches (commands run in the current directory rank first), Down to come back.
+  - **Up / Down arrows** do a prefix search: type part of a command, press Up to cycle older
+    matches (commands run in the current shell session rank first, then those run in the current
+    directory, then global history), Down to come back.
 
 All state is local; nothing leaves your machine.
 
@@ -202,8 +203,8 @@ a note. In-picker keys:
 
 ### Up / Down arrows
 
-Type a prefix and press **Up** to walk older matching commands (current-directory matches first,
-then global); **Down** walks back toward newer, and returns to exactly what you typed at the top.
+Type a prefix and press **Up** to walk older matching commands (this shell session's matches
+first, then current-directory matches, then global); **Down** walks back toward newer, and returns to exactly what you typed at the top.
 
 ### Favorites
 

@@ -5,7 +5,8 @@
 /// - `preexec` captures the command line, $PWD and a start time.
 /// - `precmd` finalizes it with the exit code ($?).
 /// - Ctrl-R opens fzf over the full history.
-/// - Up/Down arrows do cwd-aware prefix search, cycling older/newer matches.
+/// - Up/Down arrows do prefix search, cycling older/newer matches: this session's
+///   commands first, then the current directory's, then global history.
 pub const ZSH: &str = r####"# hindsight — zsh integration. Add `eval "$(hindsight init zsh)"` to the end of ~/.zshrc.
 
 # Per-shell session id: <epoch-ms>-<pid>. $$ is the shell PID; the millisecond
@@ -96,7 +97,7 @@ function __hindsight_search_widget() {
 zle -N __hindsight_search_widget
 bindkey '^R' __hindsight_search_widget
 
-# --- Up/Down arrows: cwd-aware prefix search, cycling through matches ---
+# --- Up/Down arrows: session-then-cwd-aware prefix search, cycling through matches ---
 #
 # On the first press we snapshot the typed text as the fixed search prefix.
 # While cycling (previous widget was also ours) we keep that prefix and only
@@ -129,7 +130,7 @@ function __hindsight_history_search() {
     # __hindsight_offset counts matches back from the typed text (0 = typed text,
     # 1 = newest match, ...), so the DB offset is one less.
     local match
-    match="$(command hindsight search --cwd "$PWD" --offset "$(( __hindsight_offset - 1 ))" -- "$__hindsight_prefix")"
+    match="$(command hindsight search --cwd "$PWD" --session "$__hindsight_session" --offset "$(( __hindsight_offset - 1 ))" -- "$__hindsight_prefix")"
     if [[ -n "$match" ]]; then
         BUFFER="$match"
         CURSOR=$#BUFFER
@@ -164,7 +165,8 @@ bindkey '^[OB' __hindsight_down_widget   # Down arrow (application/cursor-key mo
 ///   with the exit code). If bash-preexec is already loaded, its
 ///   `preexec_functions`/`precmd_functions` are used instead.
 /// - Ctrl-R opens fzf over the full history (readline `bind -x`).
-/// - Up/Down arrows do cwd-aware prefix search, cycling older/newer matches.
+/// - Up/Down arrows do prefix search, cycling older/newer matches: this session's
+///   commands first, then the current directory's, then global history.
 ///
 /// Requires bash >= 5.0 (EPOCHREALTIME, reliable READLINE_POINT writes); the
 /// script degrades to a no-op with a warning on older bash.
@@ -339,7 +341,7 @@ bind -m emacs      -x '"\C-r": __hindsight_search_widget'
 bind -m vi-insert  -x '"\C-r": __hindsight_search_widget'
 bind -m vi-command -x '"\C-r": __hindsight_search_widget'
 
-# --- Up/Down arrows: cwd-aware prefix search, cycling through matches ---
+# --- Up/Down arrows: session-then-cwd-aware prefix search, cycling through matches ---
 #
 # On the first press we snapshot the typed text as the fixed search prefix.
 # While cycling (the buffer still holds exactly what our widget last wrote —
@@ -373,7 +375,7 @@ __hindsight_history_search() {
 
     # __hindsight_offset counts matches back from the typed text (0 = typed text,
     # 1 = newest match, ...), so the DB offset is one less.
-    match="$(command hindsight search --cwd "$PWD" --offset "$((__hindsight_offset - 1))" -- "$__hindsight_prefix")"
+    match="$(command hindsight search --cwd "$PWD" --session "$__hindsight_session" --offset "$((__hindsight_offset - 1))" -- "$__hindsight_prefix")"
     if [[ -n "$match" ]]; then
         READLINE_LINE="$match"
         READLINE_POINT=${#READLINE_LINE}

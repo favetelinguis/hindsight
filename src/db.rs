@@ -584,27 +584,41 @@ pub fn deleted_ts(conn: &Connection, cmd: &str) -> Result<Option<i64>> {
         .ok())
 }
 
-/// cwd-aware prefix search for the Up-arrow widget.
-/// Returns commands matching `prefix`, ranked cwd-matches first, newest-first,
-/// deduped. `offset` selects the Nth match (for repeated Up presses).
-pub fn search(conn: &Connection, cwd: &str, prefix: &str, offset: i64) -> Result<Option<String>> {
+/// Prefix search for the Up/Down arrow widgets. Returns commands matching
+/// `prefix`, deduped, ranked in three tiers. Within each tier, the newest
+/// relevant run comes first: in-session for tier 1, in-cwd for tier 2, global
+/// for tier 3. `offset` selects the Nth match (for repeated Up presses).
+///
+/// Tiers: 1 = run in `session`; 2 = run in `cwd`; 3 = everything else.
+pub fn search(
+    conn: &Connection,
+    cwd: &str,
+    session: Option<&str>,
+    prefix: &str,
+    offset: i64,
+) -> Result<Option<String>> {
     let like = format!("{}%", escape_like(prefix));
-    // MAX(id) breaks recency ties within the same second (see `list`).
+    // `sid`/`cid` are NULL when the command never ran in the session / cwd.
+    // The session may be NULL too: `c.session = NULL` is never true, so the
+    // session tier is simply empty. MAX(id) breaks same-second ties (see `list`).
     let mut stmt = conn.prepare(
         "SELECT cmd FROM (
              SELECT cmd,
-                    MAX(id) AS mid,
-                    MAX(CASE WHEN cwd = ?1 THEN 1 ELSE 0 END) AS here
+                    MAX(CASE WHEN session = ?2 THEN id END) AS sid,
+                    MAX(CASE WHEN cwd = ?1 THEN id END) AS cid,
+                    MAX(id) AS mid
              FROM commands
-             WHERE cmd LIKE ?2 ESCAPE '\\'
+             WHERE cmd LIKE ?3 ESCAPE '\\'
                AND cmd NOT IN (SELECT cmd FROM deleted)
              GROUP BY cmd
          )
-         ORDER BY here DESC, mid DESC
-         LIMIT 1 OFFSET ?3",
+         ORDER BY (sid IS NOT NULL) DESC,
+                  (cid IS NOT NULL) DESC,
+                  COALESCE(sid, cid, mid) DESC
+         LIMIT 1 OFFSET ?4",
     )?;
     let result = stmt
-        .query_row(rusqlite::params![cwd, like, offset.max(0)], |r| {
+        .query_row(rusqlite::params![cwd, session, like, offset.max(0)], |r| {
             r.get::<_, String>(0)
         })
         .ok();
@@ -993,11 +1007,85 @@ mod tests {
         record(&c, "s1", "/other", "git status", 0);
         record(&c, "s1", "/here", "git push", 0);
         record(&c, "s1", "/other", "git pull", 0); // newest overall
-        let hit = |o| search(&c, "/here", "git", o).unwrap();
+        let hit = |o| search(&c, "/here", None, "git", o).unwrap();
         assert_eq!(hit(0).as_deref(), Some("git push"));
         assert_eq!(hit(1).as_deref(), Some("git pull"));
         assert_eq!(hit(2).as_deref(), Some("git status"));
         assert_eq!(hit(3), None);
+    }
+
+    /// Collect every match `search` yields for `prefix`, walking the offset until None.
+    fn all_matches(c: &Connection, cwd: &str, session: Option<&str>, prefix: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for o in 0.. {
+            match search(c, cwd, session, prefix, o).unwrap() {
+                Some(m) => out.push(m),
+                None => break,
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn search_ranks_session_commands_before_newer_same_cwd_other_session() {
+        let c = conn();
+        record(&c, "mine", "/a", "git status", 0);
+        record(&c, "other", "/a", "git pull", 0); // newer, same cwd, other session
+        assert_eq!(
+            all_matches(&c, "/a", Some("mine"), "git"),
+            vec!["git status", "git pull"]
+        );
+    }
+
+    #[test]
+    fn search_session_commands_stay_first_after_cd() {
+        let c = conn();
+        record(&c, "other", "/b", "git pull", 0); // cwd match for /b, other session
+        record(&c, "mine", "/a", "git status", 0); // ran in /a, then user did `cd /b`
+        assert_eq!(
+            all_matches(&c, "/b", Some("mine"), "git"),
+            vec!["git status", "git pull"]
+        );
+    }
+
+    #[test]
+    fn search_session_order_ignores_out_of_session_reruns() {
+        let c = conn();
+        record(&c, "mine", "/a", "git status", 0);
+        record(&c, "mine", "/a", "git push", 0);
+        record(&c, "other", "/a", "git status", 0); // re-run elsewhere, newest overall
+        assert_eq!(
+            all_matches(&c, "/a", Some("mine"), "git"),
+            vec!["git push", "git status"]
+        );
+    }
+
+    #[test]
+    fn search_tiers_session_then_cwd_then_global() {
+        let c = conn();
+        record(&c, "mine", "/here", "git status", 0);
+        record(&c, "x", "/here", "git fetch", 0);
+        record(&c, "other", "/elsewhere", "git pull", 0); // newest overall
+        assert_eq!(
+            all_matches(&c, "/here", Some("mine"), "git"),
+            vec!["git status", "git fetch", "git pull"]
+        );
+        // No session, or a session with no matches: cwd tier, then global.
+        let no_session = vec!["git fetch", "git status", "git pull"];
+        assert_eq!(all_matches(&c, "/here", None, "git"), no_session);
+        assert_eq!(all_matches(&c, "/here", Some("nope"), "git"), no_session);
+    }
+
+    #[test]
+    fn search_cwd_tier_uses_in_cwd_recency_not_global() {
+        let c = conn();
+        record(&c, "x", "/here", "git add", 0); // old run in cwd
+        record(&c, "x", "/here", "git commit", 0); // newer run in cwd
+        record(&c, "x", "/elsewhere", "git add", 0); // newest run overall, other dir
+        assert_eq!(
+            all_matches(&c, "/here", None, "git"),
+            vec!["git commit", "git add"]
+        );
     }
 
     #[test]
@@ -1006,10 +1094,10 @@ mod tests {
         record(&c, "s1", "/", "grep 100% done", 0);
         record(&c, "s1", "/", "grep 100x done", 0);
         assert_eq!(
-            search(&c, "/", "grep 100%", 0).unwrap().as_deref(),
+            search(&c, "/", None, "grep 100%", 0).unwrap().as_deref(),
             Some("grep 100% done")
         );
-        assert_eq!(search(&c, "/", "grep 100%", 1).unwrap(), None);
+        assert_eq!(search(&c, "/", None, "grep 100%", 1).unwrap(), None);
     }
 
     #[test]
@@ -1023,7 +1111,7 @@ mod tests {
         record(&c, "s1", "/", "secret cmd", 0);
         soft_delete(&c, "secret cmd").unwrap();
         assert!(list(&c, None, None, None).unwrap().is_empty());
-        assert!(search(&c, "/", "secret", 0).unwrap().is_none());
+        assert!(search(&c, "/", None, "secret", 0).unwrap().is_none());
         assert!(inspect(&c, "secret cmd").unwrap().is_none());
         assert!(stats_top_commands(&c, 10).unwrap().is_empty());
         // ...but the data is still reachable via the deleted surface.

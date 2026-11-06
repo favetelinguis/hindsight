@@ -75,10 +75,13 @@ enum Commands {
         #[arg(long)]
         limit: Option<i64>,
     },
-    /// cwd-aware prefix search (called from the Up-arrow widget).
+    /// Session- then cwd-aware prefix search (called from the Up-arrow widget).
     Search {
         #[arg(long)]
         cwd: String,
+        /// Current shell session id: its commands rank first.
+        #[arg(long)]
+        session: Option<String>,
         /// Which match to return (0 = best/newest), for repeated Up presses.
         #[arg(long, default_value_t = 0)]
         offset: i64,
@@ -383,12 +386,13 @@ fn main() -> Result<()> {
         }
         Commands::Search {
             cwd,
+            session,
             offset,
             prefix,
         } => {
             let conn = db::open()?;
             let prefix = prefix.join(" ");
-            if let Some(m) = db::search(&conn, &cwd, &prefix, offset)? {
+            if let Some(m) = db::search(&conn, &cwd, session.as_deref(), &prefix, offset)? {
                 println!("{m}");
             }
         }
