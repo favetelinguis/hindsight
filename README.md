@@ -204,7 +204,8 @@ a note. In-picker keys:
 ### Up / Down arrows
 
 Type a prefix and press **Up** to walk older matching commands (this shell session's matches
-first, then current-directory matches, then global); **Down** walks back toward newer, and returns to exactly what you typed at the top.
+first, then current-directory matches, then global); **Down** walks back toward newer, and
+returns to exactly what you typed at the top.
 
 ### Favorites
 

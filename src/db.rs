@@ -599,7 +599,7 @@ pub fn search(
 ) -> Result<Option<String>> {
     let like = format!("{}%", escape_like(prefix));
     // `sid`/`cid` are NULL when the command never ran in the session / cwd.
-    // The session may be NULL too: `c.session = NULL` is never true, so the
+    // A NULL session binds as NULL, so `session = ?2` is never true and the
     // session tier is simply empty. MAX(id) breaks same-second ties (see `list`).
     let mut stmt = conn.prepare(
         "SELECT cmd FROM (
